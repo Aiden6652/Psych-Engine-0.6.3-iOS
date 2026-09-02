@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-13  # 固定macOS 13，Xcode 14.3，兼容旧版lime/hxcpp
+    runs-on: macos-14  # 固定macOS 13，Xcode 14.3，兼容旧版lime/hxcpp
     timeout-minutes: 60
 
     steps:
