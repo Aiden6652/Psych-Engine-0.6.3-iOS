@@ -60,4 +60,4 @@ jobs:
         with:
           name: PsychEngine_0.6.3_iOS_unsigned
           path: PsychEngine_0.6.3_iOS_unsigned.ipa
-          retention-days: 30  # 保留30天
+          retention-days: 7  # 保留30天
