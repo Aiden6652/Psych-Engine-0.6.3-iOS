@@ -1,4 +1,4 @@
-name: Psych Engine 0.6.3 iOS Build
+name: Psych Engine 0.6.3 build ipa
 
 on:
   push:
