@@ -97,7 +97,7 @@ jobs:
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            -nocolor 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             echo "### Xcode 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
