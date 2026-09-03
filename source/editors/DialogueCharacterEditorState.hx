@@ -162,7 +162,7 @@ class DialogueCharacterEditorState extends MusicBeatState
 		FlxG.mouse.visible = true;
 		updateCharTypeBox();
 
-		#if android
+		#if (android || ios)
 		addVirtualPad(FULL, A_B_X_Y);
 		addPadCamera();
 		#end
@@ -776,7 +776,7 @@ class DialogueCharacterEditorState extends MusicBeatState
 			var splittedImage:Array<String> = imageInputText.text.trim().split('_');
 			var characterName:String = splittedImage[0].toLowerCase().replace(' ', '');
 
-			#if android
+			#if (android || ios)
 			SUtil.saveContent(characterName, ".json", data);
 			#else
 			_file = new FileReference();

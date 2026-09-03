@@ -201,7 +201,7 @@ class CharacterEditorState extends MusicBeatState
 		FlxG.mouse.visible = true;
 		reloadCharacterOptions();
 
-		#if android
+		#if (android || ios)
 		addVirtualPad(FULL, FULL);
 		addPadCamera();
 		#end
@@ -1304,7 +1304,7 @@ class CharacterEditorState extends MusicBeatState
 
 		if (data.length > 0)
 		{
-			#if android
+			#if (android || ios)
 			SUtil.saveContent(daAnim, ".json", data);
 			#else
 			_file = new FileReference();

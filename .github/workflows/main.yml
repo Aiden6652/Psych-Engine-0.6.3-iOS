@@ -1,63 +1,119 @@
-name: Psych Engine 0.6.3 iOS ipa build
+name: Psych Engine 0.6.3 iOS Build
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # 支持手动触发构建
+  workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-14  # 固定macOS 13，Xcode 14.3，兼容旧版lime/hxcpp
-    timeout-minutes: 60
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    env:
+      HAXE_HOME: ${{ github.workspace }}/_haxe
+      HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      # 让 xcodebuild 跳过代码签名（侧载用，无需开发者账号）
+      CODE_SIGNING_ALLOWED: NO
+      CODE_SIGNING_REQUIRED: NO
+      CODE_SIGN_IDENTITY: ""
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Haxe 4.2.4（固定兼容版本）
+      - name: 缓存 Haxe 与 haxelib 库
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            _haxe
+            _haxelib
+          key: haxe-4.2.4-psych063-v1
+
+      - name: 安装 Haxe 4.2.4
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          curl -L https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx64.tar.gz -o haxe.tar.gz
+          set -e
+          curl -L --retry 5 --retry-delay 5 \
+            https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx64.tar.gz \
+            -o haxe.tar.gz
           tar xzf haxe.tar.gz
-          sudo mv haxe_4.2.4 /usr/local/haxe
-          sudo ln -sf /usr/local/haxe/haxe /usr/local/bin/haxe
-          sudo ln -sf /usr/local/haxe/haxelib /usr/local/bin/haxelib
-          haxelib setup /usr/local/haxe/lib
+          mv haxe_4.2.4 _haxe
+          mkdir -p _haxelib
+
+      - name: 配置 haxe / haxelib
+        run: |
+          set -e
+          echo "$HAXE_HOME" >> $GITHUB_PATH
+          export PATH="$HAXE_HOME:$PATH"
+          haxelib setup "$HAXELIB_ROOT"
           haxe -version
           haxelib version
 
-      - name: 安装项目所有依赖库
+      - name: 安装依赖（按 hmm.json 精确版本）
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          haxelib install all --always
+          set -e
+          haxelib install lime 7.9.0 --always
+          haxelib install openfl 9.1.0 --always
+          haxelib install flixel 4.11.0 --always
+          haxelib install flixel-addons 2.11.0 --always
+          haxelib install flixel-ui --always
+          haxelib install hscript --always
+          haxelib install hxcpp --always
+          haxelib git linc_luajit https://github.com/Sirox228/linc_luajit.git master
+          haxelib git hxCodec https://github.com/JonnycatMeow/hxCodec-old.git main
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main
           haxelib list
 
-      - name: 配置 Xcode 命令行工具
+      - name: 初始化 lime
         run: |
-          sudo xcode-select -s /Applications/Xcode_14.3.app/Contents/Developer
+          yes "" | haxelib run lime setup || true
+          haxelib run lime version || true
+
+      - name: 选择 Xcode（用 runner 自带版本，不硬编码路径）
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+          xcode-select -p
           xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS Release 包（无签名）
+      - name: 编译 iOS（arm64 / release / 免签名）
         run: |
-          # 编译arm64真机版本，禁用代码签名
-          lime build ios -release -nocolor -D NO_CODE_SIGN=1 -D HXCPP_ARM64=1
-
-      - name: 打包成 IPA 文件
-        run: |
-          APP_PATH="build/ios/build/Release-iphoneos/Psych Engine.app"
-          if [ -d "$APP_PATH" ]; then
-            mkdir -p Payload
-            cp -R "$APP_PATH" Payload/
-            zip -r "PsychEngine_0.6.3_iOS_unsigned.ipa" Payload
-            echo "IPA 打包完成"
-          else
-            echo "错误：未找到 .app 产物，编译可能失败"
-            exit 1
+          set +e
+          lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            echo "### 编译失败（exit $code），关键错误：" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|cannot|failed|undefined|not found" build.log \
+              | grep -viE "warning" | head -60 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit $code
           fi
 
-      - name: 上传构建产物
+      - name: 打包 IPA
+        run: |
+          set -e
+          APP_PATH=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "### 未找到 .app 产物" >> $GITHUB_STEP_SUMMARY
+            find . -maxdepth 8 -name "*.app" -type d | head -20
+            exit 1
+          fi
+          echo "找到产物: $APP_PATH"
+          rm -rf Payload *.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry PsychEngine_iOS_unsigned.ipa Payload
+          ls -lh PsychEngine_iOS_unsigned.ipa
+
+      - name: 上传 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: PsychEngine_0.6.3_iOS_unsigned
-          path: PsychEngine_0.6.3_iOS_unsigned.ipa
-          retention-days: 7  # 保留30天
+          name: PsychEngine_iOS_unsigned
+          path: PsychEngine_iOS_unsigned.ipa
+          retention-days: 14

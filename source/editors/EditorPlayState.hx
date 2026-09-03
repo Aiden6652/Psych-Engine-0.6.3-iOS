@@ -166,11 +166,11 @@ class EditorPlayState extends MusicBeatState
 			FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, onKeyRelease);
 		}
 
-		#if android
+		#if (android || ios)
 		addAndroidControls();
 		#end
 
-		#if android
+		#if (android || ios)
 		androidc.visible = true;
 		#end
 
@@ -337,7 +337,7 @@ class EditorPlayState extends MusicBeatState
 		{
 			FlxG.sound.music.pause();
 			vocals.pause();
-			#if android
+			#if (android || ios)
 			androidc.visible = false;
 			#end
 			LoadingState.loadAndSwitchState(new editors.ChartingState());

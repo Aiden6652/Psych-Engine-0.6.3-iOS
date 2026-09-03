@@ -106,7 +106,7 @@ class DialogueEditorState extends MusicBeatState
 		add(daText);
 		changeText();
 
-		#if android
+		#if (android || ios)
 		addVirtualPad(FULL, A_B_C);
 		#end
 
@@ -529,7 +529,7 @@ class DialogueEditorState extends MusicBeatState
 		var data:String = Json.stringify(dialogueFile, "\t");
 		if (data.length > 0)
 		{
-			#if android
+			#if (android || ios)
 			SUtil.saveContent("dialogue", ".json", data);
 			#else
 			_file = new FileReference();

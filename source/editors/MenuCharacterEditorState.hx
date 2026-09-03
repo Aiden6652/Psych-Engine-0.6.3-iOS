@@ -81,7 +81,7 @@ class MenuCharacterEditorState extends MusicBeatState
 		FlxG.mouse.visible = true;
 		updateCharTypeBox();
 
-		#if android
+		#if (android || ios)
 		addVirtualPad(FULL, A_B);
 		#end
 
@@ -414,7 +414,7 @@ class MenuCharacterEditorState extends MusicBeatState
 			var splittedImage:Array<String> = imageInputText.text.trim().split('_');
 			var characterName:String = splittedImage[splittedImage.length-1].toLowerCase().replace(' ', '');
 
-			#if android
+			#if (android || ios)
 			SUtil.saveContent(characterName, ".json", data);
 			#else
 			_file = new FileReference();

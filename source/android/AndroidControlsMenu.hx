@@ -44,7 +44,7 @@ class AndroidControlsMenu extends MusicBeatState
 		bg.antialiasing = ClientPrefs.globalAntialiasing;
 		add(bg);
 
-		#if android
+		#if (android || ios)
 		var titleText:Alphabet = new Alphabet(75, 60, "Android Controls", true);
 		#end
 		
