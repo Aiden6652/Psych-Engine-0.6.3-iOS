@@ -9,61 +9,42 @@ jobs:
   build-ios:
     runs-on: macos-14
     timeout-minutes: 120
-
     env:
-      HAXE_HOME: ${{ github.workspace }}/_haxe
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
-      # 让 xcodebuild 跳过代码签名（侧载用，无需开发者账号）
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGN_IDENTITY: ""
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 缓存 Haxe 与 haxelib 库
+      - name: 缓存 haxelib 库
         id: cache
         uses: actions/cache@v4
         with:
-          path: |
-            _haxe
-            _haxelib
-          key: haxe-4.2.4-psych063-v2
+          path: _haxelib
+          key: psych063-haxelib-v1
 
-      - name: 安装 Haxe 4.2.4
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
           set -e
-          # Apple Silicon runner 上跑 x86_64 的 Haxe 4.2.4 需要 Rosetta
           sudo softwareupdate --install-rosetta --agree-to-license || true
-          # 注意：macOS 包名是 haxe-4.2.4-osx.tar.gz（没有 64）
-          curl -fL --retry 5 --retry-delay 5 \
-            https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx.tar.gz \
-            -o haxe.tar.gz
-          SZ=$(wc -c < haxe.tar.gz | tr -d ' ')
-          echo "下载大小: $SZ bytes"
-          if [ "$SZ" -lt 1000000 ]; then
-            echo "下载异常（文件过小，可能 404）"; head -c 200 haxe.tar.gz; exit 1
-          fi
-          DIR=$(tar tzf haxe.tar.gz | head -1 | cut -d/ -f1)
-          echo "解压目录: $DIR"
-          tar xzf haxe.tar.gz
-          rm -rf _haxe
-          mv "$DIR" _haxe
-          mkdir -p _haxelib
-          ls _haxe
-
-      - name: 配置 haxe / haxelib
-        run: |
-          set -e
-          echo "$HAXE_HOME" >> $GITHUB_PATH
-          export PATH="$HAXE_HOME:$PATH"
-          haxelib setup "$HAXELIB_ROOT"
+          curl -fL --retry 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
+          SZ=$(wc -c < haxe.pkg | tr -d ' ')
+          echo "size=$SZ"
+          if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
+          sudo installer -pkg haxe.pkg -target /
+          which haxe haxelib
           haxe -version
           haxelib version
 
-      - name: 安装依赖（按 hmm.json 精确版本）
+      - name: 配置 haxelib
+        run: |
+          set -e
+          haxelib setup "$HAXELIB_ROOT"
+          haxelib version
+
+      - name: 安装依赖（按 hmm.json）
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -e
@@ -86,23 +67,21 @@ jobs:
           yes "" | haxelib run lime setup || true
           haxelib run lime version || true
 
-      - name: 选择 Xcode（用 runner 自带版本，不硬编码路径）
+      - name: 选择 Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
-          xcode-select -p
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS（arm64 / release / 免签名）
+      - name: 编译 iOS
         run: |
           set +e
           lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### 编译失败（exit $code），关键错误：" >> $GITHUB_STEP_SUMMARY
+            echo "### 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|cannot|failed|undefined|not found" build.log \
-              | grep -viE "warning" | head -60 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|cannot|failed|undefined" build.log | head -60 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
@@ -110,18 +89,13 @@ jobs:
       - name: 打包 IPA
         run: |
           set -e
-          APP_PATH=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "### 未找到 .app 产物" >> $GITHUB_STEP_SUMMARY
-            find . -maxdepth 8 -name "*.app" -type d | head -20
-            exit 1
-          fi
-          echo "找到产物: $APP_PATH"
-          rm -rf Payload *.ipa
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
+          APP=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
+          echo "产物: $APP"
+          rm -rf Payload *.ipa; mkdir -p Payload
+          cp -R "$APP" Payload/
           zip -qry PsychEngine_iOS_unsigned.ipa Payload
-          ls -lh PsychEngine_iOS_unsigned.ipa
+          ls -lh *.ipa
 
       - name: 上传 IPA
         uses: actions/upload-artifact@v4
