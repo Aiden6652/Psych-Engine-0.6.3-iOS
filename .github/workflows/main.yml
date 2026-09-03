@@ -77,15 +77,32 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS
+      - name: 生成 Xcode 项目（lime 自带签名会失败，但项目已生成，允许失败）
         run: |
           set +e
-          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
+          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee gen.log || true
+          if [ ! -d "export/release/ios/PsychEngine.xcodeproj" ]; then
+            echo "### Xcode 项目未生成" >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|cannot|failed" gen.log | head -40 >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "项目已生成"
+
+      - name: 编译（免签名 + 仅 arm64）
+        run: |
+          set +e
+          cd export/release/ios
+          xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
+            -configuration Release -sdk iphoneos \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -nocolor 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
+            echo "### Xcode 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|cannot|failed|undefined" build.log | head -60 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error:|failed|undefined" "$GITHUB_WORKSPACE/build.log" | head -50 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
