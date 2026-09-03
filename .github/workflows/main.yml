@@ -70,7 +70,6 @@ jobs:
           ( haxelib run lime setup </dev/null ) & PID=$!
           for i in $(seq 1 30); do kill -0 $PID 2>/dev/null || break; sleep 2; done
           kill $PID 2>/dev/null || true
-          haxelib run lime version </dev/null || true
 
       - name: 选择 Xcode
         run: |
@@ -81,7 +80,7 @@ jobs:
       - name: 编译 iOS
         run: |
           set +e
-          lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
+          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             echo "### 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
