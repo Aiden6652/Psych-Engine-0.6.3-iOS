@@ -29,18 +29,30 @@ jobs:
           path: |
             _haxe
             _haxelib
-          key: haxe-4.2.4-psych063-v1
+          key: haxe-4.2.4-psych063-v2
 
       - name: 安装 Haxe 4.2.4
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -e
-          curl -L --retry 5 --retry-delay 5 \
-            https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx64.tar.gz \
+          # Apple Silicon runner 上跑 x86_64 的 Haxe 4.2.4 需要 Rosetta
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          # 注意：macOS 包名是 haxe-4.2.4-osx.tar.gz（没有 64）
+          curl -fL --retry 5 --retry-delay 5 \
+            https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx.tar.gz \
             -o haxe.tar.gz
+          SZ=$(wc -c < haxe.tar.gz | tr -d ' ')
+          echo "下载大小: $SZ bytes"
+          if [ "$SZ" -lt 1000000 ]; then
+            echo "下载异常（文件过小，可能 404）"; head -c 200 haxe.tar.gz; exit 1
+          fi
+          DIR=$(tar tzf haxe.tar.gz | head -1 | cut -d/ -f1)
+          echo "解压目录: $DIR"
           tar xzf haxe.tar.gz
-          mv haxe_4.2.4 _haxe
+          rm -rf _haxe
+          mv "$DIR" _haxe
           mkdir -p _haxelib
+          ls _haxe
 
       - name: 配置 haxe / haxelib
         run: |
