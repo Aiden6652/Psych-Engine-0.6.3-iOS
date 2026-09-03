@@ -65,8 +65,12 @@ jobs:
 
       - name: 初始化 lime
         run: |
-          yes "" | haxelib run lime setup || true
-          haxelib run lime version || true
+          # 不能管道喂 yes：会让 lime 以为有终端输入，陷入无限提问（曾卡死 50+ 分钟）
+          # 用 </dev/null 走非交互分支，并加 60s 硬超时兜底
+          ( haxelib run lime setup </dev/null ) & PID=$!
+          for i in $(seq 1 30); do kill -0 $PID 2>/dev/null || break; sleep 2; done
+          kill $PID 2>/dev/null || true
+          haxelib run lime version </dev/null || true
 
       - name: 选择 Xcode
         run: |
