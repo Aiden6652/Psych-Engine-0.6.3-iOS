@@ -23,7 +23,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v1
+          key: psych063-haxelib-v2
 
       - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
@@ -55,11 +55,12 @@ jobs:
           haxelib install flixel-ui --always
           haxelib install hscript --always
           haxelib install hxcpp --always
-          haxelib git linc_luajit https://github.com/Sirox228/linc_luajit.git master
-          haxelib git hxCodec https://github.com/JonnycatMeow/hxCodec-old.git main
-          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main
-          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master
-          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
+          # 以下 git 依赖 iOS 用不到（Project.xml 分别受 VIDEOS_ALLOWED / desktop / android 约束），失败不阻断
+          haxelib git hxCodec https://github.com/JonnycatMeow/hxCodec-old.git main || echo "skip hxCodec"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
           haxelib list
 
       - name: 初始化 lime
