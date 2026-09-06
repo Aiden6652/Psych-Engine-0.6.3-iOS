@@ -8,12 +8,9 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 150
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
-      CODE_SIGNING_ALLOWED: NO
-      CODE_SIGNING_REQUIRED: NO
-      CODE_SIGN_IDENTITY: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +53,6 @@ jobs:
           haxelib install hscript --always
           haxelib install hxcpp --always
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
-          # 以下 git 依赖 iOS 用不到，失败不阻断
           haxelib git hxCodec https://github.com/JonnycatMeow/hxCodec-old.git main || echo "skip hxCodec"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
@@ -75,22 +71,50 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      # 全 lime 构建（免签名 + 仅 arm64）
-      # lime 7.9 的 IOSHelper：只有显式传 -arm64 flag 才会给 xcodebuild 加 -arch arm64，
-      # 否则 xcodebuild 用默认 ARCHS（含已废弃的 armv7）导致编译失败。
-      # 签名通过 CODE_SIGNING_ALLOWED=NO 等环境变量禁用（lime 会继承给子进程）。
-      - name: 构建 IPA（lime 全程处理）
+      # 先让 lime 编译 Haxe + 生成 Xcode 项目（签名失败会退出，但 Haxe 已编译、项目已生成）
+      - name: lime 生成项目并编译 Haxe
+        run: |
+          set +e
+          haxelib run lime build ios -release -arm64 2>&1 | tee "$GITHUB_WORKSPACE/lime_gen.log"
+          echo "exit=$?"
+          ls -la export/release/ios/ 2>/dev/null || true
+          ls -la export/release/ios/PsychEngine.xcodeproj 2>/dev/null || echo "xcodeproj 未生成"
+          # 不在此处失败，继续到下一步处理
+
+      # 修改 Xcode 项目：禁用签名 + 仅 arm64
+      - name: 修改 Xcode 项目禁用签名
         run: |
           set -e
-          export CODE_SIGNING_ALLOWED=NO
-          export CODE_SIGNING_REQUIRED=NO
-          export CODE_SIGN_IDENTITY=""
-          haxelib run lime build ios -release -arm64 -nocolor 2>&1 | tee "$GITHUB_WORKSPACE/lime_build.log"
+          PROJ="export/release/ios/PsychEngine.xcodeproj/project.pbxproj"
+          if [ ! -f "$PROJ" ]; then echo "找不到 $PROJ"; exit 1; fi
+          cp "$PROJ" "$PROJ.bak"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g; s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = "";/g' "$PROJ"
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g; s/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PROJ"
+          sed -i '' '/DEVELOPMENT_TEAM =/d' "$PROJ"
+          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER =/d' "$PROJ"
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 9.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PROJ"
+          echo "=== 修改后的签名相关设置 ==="
+          grep -E "CODE_SIGN|DEVELOPMENT_TEAM|ARCHS|IPHONEOS_DEPLOYMENT" "$PROJ" | head -30
+
+      # 手动 xcodebuild（显式传签名禁用 + arm64 + lime 环境）
+      - name: xcodebuild 编译
+        run: |
+          set -e
+          cd export/release/ios
+          export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+          export HAXELIB_ROOT="$GITHUB_WORKSPACE/_haxelib"
+          export HAXE_HOME="/usr/local"
+          xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
+            -configuration Release -sdk iphoneos \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### lime 构建失败 exit=$code" >> $GITHUB_STEP_SUMMARY
+            echo "### xcodebuild 失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|failed|cannot|exception" "$GITHUB_WORKSPACE/lime_build.log" | tail -60 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error:|failed|undefined|Error " "$GITHUB_WORKSPACE/xcodebuild.log" | tail -60 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
@@ -98,7 +122,6 @@ jobs:
       - name: 打包 IPA
         run: |
           set -e
-          # lime 输出：export/release/ios/build/Release-iphoneos/PsychEngine.app
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then find . -maxdepth 10 -name "*.app" -type d | head; exit 1; fi
           echo "产物: $APP"
