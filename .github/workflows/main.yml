@@ -71,62 +71,34 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      # 先让 lime 编译 Haxe + 生成 Xcode 项目（签名失败会退出，但 Haxe 已编译、项目已生成）
-      - name: lime 生成项目并编译 Haxe
+      # 全 lime 构建（arm64）。签名会失败，但 Haxe 编译产物 .app 已生成，允许失败继续。
+      - name: lime 构建（arm64，签名失败允许）
         run: |
           set +e
-          haxelib run lime build ios -release -arm64 2>&1 | tee "$GITHUB_WORKSPACE/lime_gen.log"
-          echo "exit=$?"
-          ls -la export/release/ios/ 2>/dev/null || true
-          ls -la export/release/ios/PsychEngine.xcodeproj 2>/dev/null || echo "xcodeproj 未生成"
-          # 不在此处失败，继续到下一步处理
+          haxelib run lime build ios -release -arm64 2>&1 | tee "$GITHUB_WORKSPACE/lime_build.log"
+          echo "lime exit=${PIPESTATUS[0]}"
+          echo "=== 查找生成的 .app ==="
+          find export -maxdepth 8 -name "*.app" -type d 2>/dev/null
+          find . -maxdepth 10 -name "*.app" -type d 2>/dev/null | head
 
-      # 修改 Xcode 项目：禁用签名 + 仅 arm64
-      - name: 修改 Xcode 项目禁用签名
-        run: |
-          set -e
-          PROJ="export/release/ios/PsychEngine.xcodeproj/project.pbxproj"
-          if [ ! -f "$PROJ" ]; then echo "找不到 $PROJ"; exit 1; fi
-          cp "$PROJ" "$PROJ.bak"
-          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g; s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = "";/g' "$PROJ"
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g; s/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PROJ"
-          sed -i '' '/DEVELOPMENT_TEAM =/d' "$PROJ"
-          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER =/d' "$PROJ"
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 9.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PROJ"
-          echo "=== 修改后的签名相关设置 ==="
-          grep -E "CODE_SIGN|DEVELOPMENT_TEAM|ARCHS|IPHONEOS_DEPLOYMENT" "$PROJ" | head -30
-
-      # 手动 xcodebuild（显式传签名禁用 + arm64 + lime 环境）
-      - name: xcodebuild 编译
-        run: |
-          set -e
-          cd export/release/ios
-          export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
-          export HAXELIB_ROOT="$GITHUB_WORKSPACE/_haxelib"
-          export HAXE_HOME="/usr/local"
-          xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
-            -configuration Release -sdk iphoneos \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
-          code=${PIPESTATUS[0]}
-          if [ "$code" -ne 0 ]; then
-            echo "### xcodebuild 失败 exit=$code" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error:|failed|undefined|Error " "$GITHUB_WORKSPACE/xcodebuild.log" | tail -60 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit $code
-          fi
-
+      # 直接打包找到的 .app（免签名 IPA，SideStore/LiveContainer 安装时再签名）
       - name: 打包 IPA
         run: |
           set -e
-          APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then find . -maxdepth 10 -name "*.app" -type d | head; exit 1; fi
+          APP=$(find export -maxdepth 8 -name "*.app" -type d 2>/dev/null | head -n 1)
+          if [ -z "$APP" ]; then APP=$(find . -maxdepth 10 -name "*.app" -type d 2>/dev/null | head -n 1); fi
+          if [ -z "$APP" ]; then
+            echo "### 未找到 .app 产物" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|failed|Error " "$GITHUB_WORKSPACE/lime_build.log" | tail -60 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
           echo "产物: $APP"
           rm -rf Payload *.ipa; mkdir -p Payload
           cp -R "$APP" Payload/
+          # 移除签名（如果有）
+          codesign --remove-signature "Payload/$(ls Payload)" 2>/dev/null || true
           zip -qry PsychEngine_iOS_unsigned.ipa Payload
           ls -lh *.ipa
 
