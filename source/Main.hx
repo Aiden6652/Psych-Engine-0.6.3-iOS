@@ -101,8 +101,6 @@ class Main extends Sprite
 			fpsVar.visible = ClientPrefs.showFPS;
 		}
 
-		@:nullSafety(Off)
-
 		#if html5
 		FlxG.autoPause = false;
 		FlxG.mouse.visible = false;
