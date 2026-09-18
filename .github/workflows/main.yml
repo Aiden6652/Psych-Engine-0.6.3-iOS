@@ -8,9 +8,12 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-    timeout-minutes: 150
+    timeout-minutes: 120
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      CODE_SIGNING_ALLOWED: NO
+      CODE_SIGNING_REQUIRED: NO
+      CODE_SIGN_IDENTITY: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +56,8 @@ jobs:
           haxelib install hscript --always
           haxelib install hxcpp --always
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
-          haxelib git hxCodec https://github.com/JonnycatMeow/hxCodec-old.git main || echo "skip hxCodec"
+          # 以下 git 依赖 iOS 用不到（Project.xml 分别受 VIDEOS_ALLOWED / desktop / android 约束），失败不阻断
+          haxelib git hxCodec https://github.com/polybiusproxy/hxCodec.git 0a51aed0d9523d22a83e453ce7b593ec7fed4742
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
@@ -61,6 +65,8 @@ jobs:
 
       - name: 初始化 lime
         run: |
+          # 不能管道喂 yes：会让 lime 以为有终端输入，陷入无限提问（曾卡死 50+ 分钟）
+          # 用 </dev/null 走非交互分支，并加 60s 硬超时兜底
           ( haxelib run lime setup </dev/null ) & PID=$!
           for i in $(seq 1 30); do kill -0 $PID 2>/dev/null || break; sleep 2; done
           kill $PID 2>/dev/null || true
@@ -71,69 +77,32 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      # 用 lime 生成 Xcode 项目 + Haxe 编译脚本（arm64）。签名失败不中断。
-      - name: lime 生成项目
+      - name: 生成 Xcode 项目（lime 自带签名会失败，但项目已生成，允许失败）
         run: |
           set +e
-          export CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-          haxelib run lime build ios -release -arm64 2>&1 | tee "$GITHUB_WORKSPACE/lime_gen.log"
-          echo "lime exit=${PIPESTATUS[0]}"
-          ls export/release/ios/PsychEngine/haxe/ 2>/dev/null || echo "haxe 目录未生成"
-          ls export/release/ios/PsychEngine.xcodeproj 2>/dev/null || echo "xcodeproj 未生成"
-          # 不失败，继续
-
-      # 手动用 make 编译 Haxe 到 arm64（确保 arch 正确，绕开 xcodebuild 的 undefined_arch）
-      - name: 手动编译 Haxe（arm64）
-        run: |
-          set -e
-          export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
-          export HAXELIB_ROOT="$GITHUB_WORKSPACE/_haxelib"
-          export HAXE_HOME="/usr/local"
-          cd export/release/ios/PsychEngine/haxe
-          echo "=== makefile 内容 ==="
-          cat makefile | head -30
-          # 直接编译 arm64（不依赖 Xcode 的 ARCHS）
-          make build-haxe-arm64 CONFIGURATION=Release PLATFORM_NAME=iphoneos 2>&1 | tee "$GITHUB_WORKSPACE/haxe_compile.log"
-          code=${PIPESTATUS[0]}
-          if [ "$code" -ne 0 ]; then
-            echo "### Haxe 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|failed|exception|cannot" "$GITHUB_WORKSPACE/haxe_compile.log" | tail -60 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit $code
+          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee gen.log || true
+          if [ ! -d "export/release/ios/PsychEngine.xcodeproj" ]; then
+            echo "### Xcode 项目未生成" >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|cannot|failed" gen.log | head -40 >> $GITHUB_STEP_SUMMARY
+            exit 1
           fi
+          echo "项目已生成"
 
-      # 修改 Xcode 项目：禁签名
-      - name: 修改 Xcode 项目禁用签名
+      - name: 编译（免签名 + 仅 arm64）
         run: |
-          set -e
-          PROJ="export/release/ios/PsychEngine.xcodeproj/project.pbxproj"
-          if [ ! -f "$PROJ" ]; then echo "找不到 $PROJ"; exit 1; fi
-          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g; s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = "";/g' "$PROJ"
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g; s/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PROJ"
-          sed -i '' '/DEVELOPMENT_TEAM =/d' "$PROJ"
-          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER =/d' "$PROJ"
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 9.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PROJ"
-          echo "=== 签名相关设置 ==="
-          grep -E "CODE_SIGN|DEVELOPMENT_TEAM|IPHONEOS_DEPLOYMENT" "$PROJ" | head -20
-
-      # xcodebuild（Haxe 已编译，Build Haxe 只做链接；禁签名）
-      - name: xcodebuild 编译
-        run: |
-          set -e
+          set +e
           cd export/release/ios
-          export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
-          export HAXELIB_ROOT="$GITHUB_WORKSPACE/_haxelib"
           xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
             -configuration Release -sdk iphoneos \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### xcodebuild 失败 exit=$code" >> $GITHUB_STEP_SUMMARY
+            echo "### Xcode 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error:|failed|undefined|Error " "$GITHUB_WORKSPACE/xcodebuild.log" | tail -60 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error:|failed|undefined" "$GITHUB_WORKSPACE/build.log" | head -50 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
@@ -141,13 +110,11 @@ jobs:
       - name: 打包 IPA
         run: |
           set -e
-          APP=$(find export/build export/release -maxdepth 8 -name "*.app" -type d 2>/dev/null | head -n 1)
-          if [ -z "$APP" ]; then APP=$(find . -maxdepth 10 -name "*.app" -type d 2>/dev/null | head -n 1); fi
-          if [ -z "$APP" ]; then echo "未找到 .app"; exit 1; fi
+          APP=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
           echo "产物: $APP"
           rm -rf Payload *.ipa; mkdir -p Payload
           cp -R "$APP" Payload/
-          codesign --remove-signature "Payload/$(ls Payload)" 2>/dev/null || true
           zip -qry PsychEngine_iOS_unsigned.ipa Payload
           ls -lh *.ipa
 
