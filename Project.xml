@@ -47,7 +47,7 @@
 	<define name="MODS_ALLOWED" if="desktop || android || ios" />
 	<define name="LUA_ALLOWED" if="desktop || android || ios" />
 	<define name="ACHIEVEMENTS_ALLOWED" />
-	<define name="VIDEOS_ALLOWED" if="web || windows || mobile" unless="32bits"/>
+	<define name="VIDEOS_ALLOWED" if="web || windows" unless="32bits"/><!-- iOS 先关掉视频：hxvlc-2.2.4 需要新一代 lime/openfl/flixel，编译不过 -->
 	<define name="PSYCH_WATERMARKS"/> <!-- DELETE THIS TO REMOVE WATERMARKS/DEV NAMES ON TITLE SCREEN -->
 	<define name="TITLE_SCREEN_EASTER_EGG" if="officialBuild"/> <!-- DELETE THE if="officialBuild" for enabling this on an unofficial build -->
 	<define name="CRASH_HANDLER" if="desktop release || mobile" />
