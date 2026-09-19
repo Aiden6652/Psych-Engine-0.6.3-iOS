@@ -14,6 +14,11 @@ jobs:
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGN_IDENTITY: ""
+      ARCHS: arm64
+      arch: arm64
+      CURRENT_ARCH: arm64
+      NATIVE_ARCH: arm64
+      NATIVE_ARCH_64_BIT: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +90,7 @@ jobs:
           fi
           echo "项目已生成"
 
-      - name: 编译（免签名 + 仅 arm64 + 旧构建系统避开 Build Haxe 竞态）
+      - name: 编译（免签名 + 仅 arm64 + 旧构建系统 + Build Haxe 环境变量）
         run: |
           set +e
           cd export/release/ios
