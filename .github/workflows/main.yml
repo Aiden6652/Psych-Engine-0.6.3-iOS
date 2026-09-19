@@ -57,7 +57,6 @@ jobs:
           haxelib install hxvlc 1.8.1 --always
           haxelib path hxvlc || { echo "### hxvlc 安装失败"; exit 1; }
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
-          # 以下 git 依赖 iOS 用不到（Project.xml 分别受 VIDEOS_ALLOWED / desktop / android 约束），失败不阻断
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
@@ -65,8 +64,6 @@ jobs:
 
       - name: 初始化 lime
         run: |
-          # 不能管道喂 yes：会让 lime 以为有终端输入，陷入无限提问（曾卡死 50+ 分钟）
-          # 用 </dev/null 走非交互分支，并加 60s 硬超时兜底
           ( haxelib run lime setup </dev/null ) & PID=$!
           for i in $(seq 1 30); do kill -0 $PID 2>/dev/null || break; sleep 2; done
           kill $PID 2>/dev/null || true
@@ -77,35 +74,21 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 生成 Xcode 项目（lime 自带签名会失败，但项目已生成，允许失败）
+      - name: 编译（lime 直接构建 iOS，不再手动 xcodebuild）
         run: |
           set +e
-          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee gen.log || true
-          if [ ! -d "export/release/ios/PsychEngine.xcodeproj" ]; then
-            echo "### Xcode 项目未生成" >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|cannot|failed" gen.log | head -40 >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          echo "项目已生成"
-
-      - name: 编译（免签名 + 仅 arm64）
-        run: |
-          set +e
-          cd export/release/ios
-          xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
-            -configuration Release -sdk iphoneos \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### Xcode 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
+            echo "### lime 构建失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error:|failed|undefined" "$GITHUB_WORKSPACE/build.log" | head -50 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error:|undefined|arch" build.log | head -50 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
+          APP=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then echo "### 未找到 .app"; exit 1; fi
+          echo "构建产物: $APP"
 
       - name: 打包 IPA
         run: |
