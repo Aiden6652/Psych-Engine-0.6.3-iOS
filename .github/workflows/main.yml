@@ -95,11 +95,11 @@ jobs:
           set -e
           COUNT=$(grep -Ril "undefined_arch" export/release/ios/ 2>/dev/null | wc -l | tr -d ' ')
           echo "发现 $COUNT 个文件含 undefined_arch"
-          grep -Ril "undefined_arch" export/release/ios/ 2>/dev/null | while read -r f; do
+          grep -Ril "undefined_arch" export/release/ios/ 2>/dev/null | grep -vE '\.(msgpack|plist|bin)$' | while read -r f; do
             echo "patch: $f"
-            sed -i.bak 's/undefined_arch/arm64/g' "$f"
+            LC_ALL=C sed -i.bak 's/undefined_arch/arm64/g' "$f"
           done
-          if grep -R "undefined_arch" export/release/ios/ 2>/dev/null | head -5; then
+          if grep -R "undefined_arch" export/release/ios/ 2>/dev/null | grep -vE '\.(msgpack|plist|bin):' | head -5; then
             echo "warning: 仍有 undefined_arch 残留" >> $GITHUB_STEP_SUMMARY
           fi
 
