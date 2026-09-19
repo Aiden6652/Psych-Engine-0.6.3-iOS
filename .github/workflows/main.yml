@@ -11,14 +11,6 @@ jobs:
     timeout-minutes: 120
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
-      CODE_SIGNING_ALLOWED: NO
-      CODE_SIGNING_REQUIRED: NO
-      CODE_SIGN_IDENTITY: ""
-      ARCHS: arm64
-      arch: arm64
-      CURRENT_ARCH: arm64
-      NATIVE_ARCH: arm64
-      NATIVE_ARCH_64_BIT: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -28,13 +20,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v4
+          key: psych063-haxelib-v5
 
-      - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
+      - name: 安装 Haxe 4.2.5（pkg 版，自带 neko）
         run: |
           set -e
           sudo softwareupdate --install-rosetta --agree-to-license || true
-          curl -fL --retry 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
+          curl -fL --retry 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
           if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
@@ -49,16 +41,16 @@ jobs:
           haxelib setup "$HAXELIB_ROOT"
           haxelib version
 
-      - name: 安装依赖
+      - name: 安装依赖（lime/hxcpp 用 0.6.3 专用修复 fork）
         run: |
           set -e
-          haxelib install lime 7.9.0 --always
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
           haxelib install openfl 9.1.0 --always
           haxelib install flixel 4.11.0 --always
           haxelib install flixel-addons 2.11.0 --always
-          haxelib install flixel-ui --always
-          haxelib install hscript --always
-          haxelib install hxcpp --always
+          haxelib install flixel-ui 2.4.0 --always
+          haxelib install hscript 2.4.0 --always
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
           haxelib install hxvlc 1.8.1 --always
           haxelib path hxvlc || { echo "### hxvlc 安装失败"; exit 1; }
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
@@ -79,71 +71,26 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 生成 Xcode 项目
+      - name: 编译 iOS（lime 一条命令 + 免签名）
         run: |
           set +e
-          haxelib run lime build ios -release -D HXCPP_ARM64 -nocolor 2>&1 | tee gen.log || true
-          if [ ! -d "export/release/ios/PsychEngine.xcodeproj" ]; then
-            echo "### Xcode 项目未生成" >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|cannot|failed" gen.log | head -40 >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-          echo "项目已生成"
-
-      - name: 移除 Build Haxe 依赖
-        run: |
-          set -e
-          python3 - <<'PY'
-          import re
-          p = "export/release/ios/PsychEngine.xcodeproj/project.pbxproj"
-          with open(p, "r") as f:
-              txt = f.read()
-          m = re.search(r'/\*\s*PsychEngine\s*\*/\s*=\s*\{', txt)
-          if not m:
-              print("未找到 PsychEngine target")
-              exit(0)
-          start = m.start()
-          block_end = txt.find("\n\t\t};", start)
-          if block_end == -1:
-              print("未找到 PsychEngine target 结束")
-              exit(0)
-          block_end += 5
-          block = txt[start:block_end]
-          new_block, n = re.subn(r'dependencies\s*=\s*\(\s*[^)]*\);', 'dependencies = ( );', block, count=1, flags=re.DOTALL)
-          if n:
-              print("已清空 PsychEngine target 的 dependencies")
-          else:
-              print("PsychEngine target 没有 dependencies 或已为空")
-          txt = txt[:start] + new_block + txt[block_end:]
-          with open(p, "w") as f:
-              f.write(txt)
-          PY
-
-      - name: 编译（免签名 + 仅 arm64 + 旧构建系统）
-        run: |
-          set +e
-          cd export/release/ios
-          xcodebuild -project PsychEngine.xcodeproj -target PsychEngine \
-            -configuration Release -sdk iphoneos \
-            -UseNewBuildSystem=NO \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          haxelib run lime build ios -release -nosign 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "### Xcode 编译失败 exit=$code" >> $GITHUB_STEP_SUMMARY
+            echo "### lime 构建失败 exit=$code" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error:|failed|undefined" "$GITHUB_WORKSPACE/build.log" | head -50 >> $GITHUB_STEP_SUMMARY
+            grep -iE "error|undefined|arch|failed" build.log | head -60 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $code
           fi
+          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then echo "### 未找到 .app"; find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
+          echo "构建产物: $APP"
 
       - name: 打包 IPA
         run: |
           set -e
-          APP=$(find export -maxdepth 6 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
+          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
           rm -rf Payload *.ipa; mkdir -p Payload
           cp -R "$APP" Payload/
