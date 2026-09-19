@@ -39,10 +39,8 @@
 		},
 		{
 			"name":"hxvlc",
-			"type":"git",
-			"dir":"hxvlc",
-			"ref":"main",
-			"url":"https://github.com/NovaFlare-Engine-haxelib/hxvlc-2.2.4.git"
+			"type":"haxelib",
+			"version":"1.8.1"
 		},
 		{
 			"name":"hxShaders",
