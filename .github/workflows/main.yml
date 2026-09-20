@@ -20,15 +20,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v6
+          key: psych063-haxelib-v7
+          restore-keys: |
+            psych063-haxelib-
 
       - name: 安装 Haxe 4.2.5（pkg 版，自带 neko）
         run: |
-          set -e
-          curl -fL --retry 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
+          set -Eeuo pipefail
+          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
-          if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
+          if [ "$SZ" -lt 1000000 ]; then
+            echo "下载异常"
+            exit 1
+          fi
           sudo installer -pkg haxe.pkg -target /
           which haxe haxelib
           haxe -version
@@ -36,37 +41,59 @@ jobs:
 
       - name: 配置 haxelib
         run: |
-          set -e
+          set -Eeuo pipefail
+          mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
           haxelib version
 
-      - name: 安装依赖（lime/hxcpp 用 0.6.3 专用修复 fork）
+      - name: 安装依赖
         run: |
-          set -e
+          set -Eeuo pipefail
+
+          echo "## 安装核心依赖"
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
           haxelib install openfl 9.1.0 --always
           haxelib install flixel 4.11.0 --always
           haxelib install flixel-addons 2.11.0 --always
           haxelib install flixel-ui 2.4.0 --always
           haxelib install hscript 2.4.0 --always
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
-          haxelib install hxvlc 1.8.1 --always
-          haxelib path hxvlc || { echo "### hxvlc 安装失败"; exit 1; }
-          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main || {
+            echo "hxcpp 安装失败"
+            exit 1
+          }
+
+          echo "## 安装可选依赖（失败不致命）"
+          haxelib install hxvlc 1.8.1 --always || echo "skip hxvlc"
+          haxelib path hxvlc || echo "skip hxvlc path"
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+
+          echo "### haxelib 依赖列表"
           haxelib list
 
       - name: 初始化 lime
         run: |
+          set -Eeuo pipefail
           ( haxelib run lime setup </dev/null ) & PID=$!
-          for i in $(seq 1 30); do kill -0 $PID 2>/dev/null || break; sleep 2; done
-          kill $PID 2>/dev/null || true
+          for i in $(seq 1 30); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          kill "$PID" 2>/dev/null || true
 
       - name: 选择 Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+          set -Eeuo pipefail
+          XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
+          if [ -n "$XCODE_PATH" ]; then
+            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          else
+            echo "未找到 Xcode.app，继续使用默认工具链"
+          fi
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
@@ -74,7 +101,7 @@ jobs:
         id: build
         continue-on-error: true
         run: |
-          set -o pipefail
+          set -Eeuo pipefail
           haxelib run lime build ios -release -nosign 2>&1 | tee build.log
 
       - name: 上传构建日志
@@ -92,16 +119,22 @@ jobs:
 
       - name: 查找产物
         run: |
+          set -Eeuo pipefail
           APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then echo "### 未找到 .app"; find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
+          if [ -z "$APP" ]; then
+            echo "### 未找到 .app"
+            find . -maxdepth 8 -name "*.app" -type d | head
+            exit 1
+          fi
           echo "构建产物: $APP"
 
       - name: 打包 IPA
         run: |
-          set -e
+          set -Eeuo pipefail
           APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
-          rm -rf Payload *.ipa; mkdir -p Payload
+          rm -rf Payload *.ipa
+          mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry PsychEngine_iOS_unsigned.ipa Payload
           ls -lh *.ipa
