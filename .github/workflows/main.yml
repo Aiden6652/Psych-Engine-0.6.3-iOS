@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-14
+    runs-on: macos-13
     timeout-minutes: 120
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
@@ -20,12 +20,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v5
+          key: psych063-haxelib-v6
 
       - name: 安装 Haxe 4.2.5（pkg 版，自带 neko）
         run: |
           set -e
-          sudo softwareupdate --install-rosetta --agree-to-license || true
           curl -fL --retry 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
@@ -71,18 +70,28 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS（lime 一条命令 + 免签名）
+      - name: 编译 iOS（保留完整日志）
+        id: build
+        continue-on-error: true
         run: |
-          set +e
+          set -o pipefail
           haxelib run lime build ios -release -nosign 2>&1 | tee build.log
-          code=${PIPESTATUS[0]}
-          if [ "$code" -ne 0 ]; then
-            echo "### lime 构建失败 exit=$code" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -iE "error|undefined|arch|failed" build.log | head -60 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit $code
-          fi
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lime-build-log
+          path: build.log
+
+      - name: 检查构建结果
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "### lime 构建失败"
+          exit 1
+
+      - name: 查找产物
+        run: |
           APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then echo "### 未找到 .app"; find . -maxdepth 8 -name "*.app" -type d | head; exit 1; fi
           echo "构建产物: $APP"
