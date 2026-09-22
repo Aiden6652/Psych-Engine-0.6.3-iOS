@@ -20,14 +20,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v7
+          key: psych063-haxelib-v8
           restore-keys: |
             psych063-haxelib-
 
-      - name: 安装 Haxe 4.2.5（pkg 版，自带 neko）
+      - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
           set -Eeuo pipefail
-          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
+          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
           if [ "$SZ" -lt 1000000 ]; then
@@ -63,8 +63,11 @@ jobs:
           }
 
           echo "## 安装可选依赖（失败不致命）"
-          haxelib install hxvlc 1.8.1 --always || echo "skip hxvlc"
-          haxelib path hxvlc || echo "skip hxvlc path"
+          haxelib remove hxvlc || echo "no hxvlc"
+          rm -rf "$HAXELIB_ROOT/hxvlc"
+          haxelib install hxvlc 1.8.1 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 1.8.1
+          haxelib path hxvlc || { echo "### hxvlc 路径失败"; exit 1; }
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
