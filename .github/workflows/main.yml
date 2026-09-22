@@ -64,9 +64,8 @@ jobs:
 
           echo "## 安装可选依赖（失败不致命）"
           haxelib remove hxvlc || echo "no hxvlc"
+          haxelib remove hxCodec || echo "no hxCodec"
           rm -rf "$HAXELIB_ROOT/hxvlc" "$HAXELIB_ROOT/hxCodec"
-          haxelib git hxCodec https://github.com/polybiusproxy/hxCodec.git 0a51aed || { echo "### hxCodec 安装失败"; exit 1; }
-          haxelib path hxCodec || { echo "### hxCodec 路径失败"; exit 1; }
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
