@@ -27,7 +27,7 @@ jobs:
       - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
           set -Eeuo pipefail
-          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
+          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
           if [ "$SZ" -lt 1000000 ]; then
