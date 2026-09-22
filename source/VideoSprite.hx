@@ -1,5 +1,9 @@
 package;
 
+import flixel.FlxG;
+import flixel.FlxSprite;
+import flixel.math.FlxMath;
+import flixel.util.FlxColor;
 import flixel.addons.display.FlxPieDial;
 import flixel.group.FlxSpriteGroup;
 import Paths;
