@@ -74,7 +74,7 @@ import sys.io.File;
 #end
 
 #if VIDEOS_ALLOWED
-import VideoSprite;
+import hxcodec.VideoHandler as MP4Handler;
 #end
 
 using StringTools;
@@ -1576,10 +1576,13 @@ class PlayState extends MusicBeatState
 			return;
 		}
 
-		var video:VideoSprite = new VideoSprite(name, false);
-		video.finishCallback = function() { startAndEnd(); };
-		add(video);
-		video.play();
+		var video:MP4Handler = new MP4Handler();
+		video.playVideo(filepath);
+		video.finishCallback = function()
+		{
+			startAndEnd();
+			return;
+		}
 		#else
 		FlxG.log.warn('Platform not supported!');
 		startAndEnd();
