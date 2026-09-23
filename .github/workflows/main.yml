@@ -76,15 +76,16 @@ jobs:
 
       - name: 初始化 lime
         run: |
-          set -Eeuo pipefail
-          ( haxelib run lime setup </dev/null ) & PID=$!
-          for i in $(seq 1 30); do
-            if ! kill -0 "$PID" 2>/dev/null; then
-              break
-            fi
-            sleep 2
-          done
-          kill "$PID" 2>/dev/null || true
+          set +e
+          echo "### lime setup"
+          haxelib run lime setup -y < /dev/null 2>&1 | tail -30
+          echo "setup RC=${PIPESTATUS[0]}"
+          echo "### lime 自检"
+          haxelib run lime --version 2>&1 | tail -5
+          echo "lime version RC=${PIPESTATUS[0]}"
+          echo "### neko"
+          which neko haxe haxelib || true
+          neko -version 2>&1 | head -2 || true
 
       - name: 选择 Xcode
         run: |
@@ -102,9 +103,12 @@ jobs:
         id: build
         continue-on-error: true
         run: |
-          set -Eeuo pipefail
+          set +e
           haxelib list || true
           haxelib run lime build ios -release -nosign 2>&1 | tee build.log
+          RC=${PIPESTATUS[0]}
+          echo "lime build RC=$RC build.log=$(wc -c < build.log) bytes"
+          exit $RC
 
       - name: 上传构建日志
         if: always()
