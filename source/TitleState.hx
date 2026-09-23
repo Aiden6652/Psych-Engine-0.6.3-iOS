@@ -495,6 +495,10 @@ class TitleState extends MusicBeatState
 		if (introSound != null) { introSound.stop(); introSound = null; }
 		if (introSpr != null) { remove(introSpr, true); introSpr = null; }
 		if (introGfx != null) { introGfx.destroy(); introGfx = null; }
+		// 记一下：片头播过了（模组里的 lua 会读这个标记，避免在 story 第一首又播一遍）
+		#if MODS_ALLOWED
+		try { File.saveContent(SUtil.getPath() + Paths.getPreloadPath('intro_seen.txt'), '1'); } catch (e:Dynamic) {}
+		#end
 		// 片头期间把标题音乐停了，这里恢复
 		FlxG.sound.playMusic(Paths.music('freakyMenu'), 0.7);
 	}
