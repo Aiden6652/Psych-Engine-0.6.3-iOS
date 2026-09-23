@@ -35,6 +35,7 @@ import flixel.tweens.FlxTween;
 import flixel.util.FlxColor;
 import flixel.util.FlxTimer;
 import openfl.Assets;
+import flixel.graphics.FlxGraphic;
 
 using StringTools;
 typedef TitleData =
@@ -405,7 +406,10 @@ class TitleState extends MusicBeatState
 		if (initialized)
 			skipIntro();
 		else
+		{
 			initialized = true;
+			startIntroVideo(); // [PE-iOS] 开机片头（只有本次启动第一次进标题页才播）
+		}
 
 		// credGroup.add(credTextShit);
 	}
@@ -425,6 +429,88 @@ class TitleState extends MusicBeatState
 		return swagGoodArray;
 	}
 
+	// ==================== [PE-iOS] 开机片头 ====================
+	// 读模组里的 images/vfx_frames/intro/0001.png …（intro.mp4 的逐帧图）并播 sounds/vfx/intro.ogg。
+	// 注意：这里**不能**用 Paths.image() —— 它内部 persist = true 会把每张图永久留在缓存里，
+	// 2344 帧 1280x720 会吃满内存直接崩。所以自己读文件、自己销毁上一张（同一时刻只留 1~2 张）。
+	// 没装模组（帧文件不存在）时什么都不做，原版流程不受影响。
+	static inline var INTRO_FRAMES:Int = 2344;
+	static inline var INTRO_FPS:Float = 24;
+	static inline var INTRO_W:Int = 1280;
+
+	var introSpr:FlxSprite = null;
+	var introGfx:FlxGraphic = null;
+	var introSound:FlxSound = null;
+	var introPlaying:Bool = false;
+	var introTime:Float = 0;
+	var introFrame:Int = 0;
+
+	inline function introPath(n:Int):String
+	{
+		return Paths.modsImages('vfx_frames/intro/' + StringTools.lpad(Std.string(n), '0', 4));
+	}
+
+	function startIntroVideo():Void
+	{
+		#if MODS_ALLOWED
+		if (!FileSystem.exists(introPath(1))) return; // 没装模组 / 没有片头帧 → 完全跳过
+		introSpr = new FlxSprite(0, 0);
+		introSpr.antialiasing = false;
+		add(introSpr);
+		introFrame = 0;
+		introTime = 0;
+		introPlaying = true;
+		setIntroFrame(1);
+		if (FileSystem.exists(Paths.modsSounds('vfx', 'intro')))
+		{
+			introSound = FlxG.sound.play(Paths.sound('vfx/intro'), 1);
+		}
+		#end
+	}
+
+	function setIntroFrame(n:Int):Void
+	{
+		#if MODS_ALLOWED
+		var p:String = introPath(n);
+		if (!FileSystem.exists(p)) return;
+		var bmd:BitmapData = null;
+		try { bmd = BitmapData.fromFile(p); } catch (e:Dynamic) { bmd = null; }
+		if (bmd == null) return;
+
+		var old:FlxGraphic = introGfx;
+		introGfx = FlxGraphic.fromBitmapData(bmd, true, null, false);
+		introGfx.persist = false;
+		introSpr.loadGraphic(introGfx);
+		introSpr.setGraphicSize(FlxG.width, Std.int(FlxG.width * (720.0 / INTRO_W)));
+		introSpr.updateHitbox();
+		introSpr.screenCenter();
+		if (old != null) old.destroy();
+		#end
+	}
+
+	function endIntroVideo():Void
+	{
+		if (!introPlaying) return;
+		introPlaying = false;
+		if (introSound != null) { introSound.stop(); introSound = null; }
+		if (introSpr != null) { remove(introSpr, true); introSpr = null; }
+		if (introGfx != null) { introGfx.destroy(); introGfx = null; }
+		// 片头期间把标题音乐停了，这里恢复
+		FlxG.sound.playMusic(Paths.music('freakyMenu'), 0.7);
+	}
+
+	function introSkippedByInput():Bool
+	{
+		var pressed:Bool = FlxG.keys.justPressed.ANY || FlxG.mouse.justPressed;
+		#if mobile
+		for (touch in FlxG.touches.list)
+		{
+			if (touch.justPressed) pressed = true;
+		}
+		#end
+		return pressed;
+	}
+
 	var transitioning:Bool = false;
 	private static var playJingle:Bool = false;
 	
@@ -435,6 +521,28 @@ class TitleState extends MusicBeatState
 	{
 		if (FlxG.sound.music != null)
 			Conductor.songPosition = FlxG.sound.music.time;
+
+		// [PE-iOS] 开机片头播放期间：切帧、按键跳过，并屏蔽标题页原有输入
+		if (introPlaying)
+		{
+			introTime += elapsed;
+			if (FlxG.sound.music != null) FlxG.sound.music.stop(); // 别和片头的声音打架
+			var want:Int = Std.int(introTime * INTRO_FPS) + 1;
+			if (want > introFrame)
+			{
+				if (want > INTRO_FRAMES)
+					endIntroVideo();
+				else
+				{
+					introFrame = want;
+					setIntroFrame(introFrame);
+				}
+			}
+			if (introPlaying && introTime > 0.6 && introSkippedByInput())
+				endIntroVideo();
+			super.update(elapsed);
+			return;
+		}
 		// FlxG.watch.addQuick('amp', FlxG.sound.music.amplitude);
 
 		var pressedEnter:Bool = FlxG.keys.justPressed.ENTER || controls.ACCEPT;
