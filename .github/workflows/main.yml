@@ -135,6 +135,14 @@ jobs:
           LIME_RUN="$HAXELIB_ROOT/lime/git/run.n"
           echo "### lime .current = $(cat "$HAXELIB_ROOT/lime/.current" 2>&1)"
           ls -la "$LIME_RUN"
+          echo "### 官方 7.9.0 的 run.n 能不能跑"
+          neko "$HAXELIB_ROOT/lime/7,9,0/run.n" --version 2>&1 | head -5
+          echo "官方 run.n RC=${PIPESTATUS[0]}"
+          echo "### 用官方 7.9.0 的 run.n 覆盖 fork 版（fork 的跑不起来）"
+          cp -f "$LIME_RUN" "$LIME_RUN.bak" 2>/dev/null || true
+          cp -f "$HAXELIB_ROOT/lime/7,9,0/run.n" "$LIME_RUN" && echo "已覆盖"
+          neko "$LIME_RUN" --version 2>&1 | head -5
+          echo "覆盖后 RC=${PIPESTATUS[0]}"
           echo "### 路线 A：neko 直跑 run.n --version"
           neko "$LIME_RUN" --version 2>&1 | head -5
           echo "A RC=${PIPESTATUS[0]}"
