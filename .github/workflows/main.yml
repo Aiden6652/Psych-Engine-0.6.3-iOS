@@ -57,6 +57,8 @@ jobs:
           haxelib install flixel-addons 2.11.0 --always
           haxelib install flixel-ui 2.4.0 --always
           haxelib install hscript 2.4.0 --always
+          haxelib install format --always
+          haxelib install hxp --always || true
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main || {
             echo "hxcpp 安装失败"
             exit 1
