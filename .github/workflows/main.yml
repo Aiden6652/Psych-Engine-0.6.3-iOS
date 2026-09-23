@@ -132,9 +132,20 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          haxelib list || true
-          haxelib run lime build ios -release -nosign 2>&1 | tee build.log
+          LIME_RUN="$HAXELIB_ROOT/lime/git/run.n"
+          echo "### lime .current = $(cat "$HAXELIB_ROOT/lime/.current" 2>&1)"
+          ls -la "$LIME_RUN"
+          echo "### 路线 A：neko 直跑 run.n --version"
+          neko "$LIME_RUN" --version 2>&1 | head -5
+          echo "A RC=${PIPESTATUS[0]}"
+          echo "### 路线 A：neko 直跑 build ios"
+          neko "$LIME_RUN" build ios -release -nosign 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ] || [ ! -s build.log ]; then
+            echo "### 路线 B（回退）：haxelib run lime"
+            haxelib run lime build ios -release -nosign 2>&1 | tee build.log
+            RC=${PIPESTATUS[0]}
+          fi
           echo "lime build RC=$RC build.log=$(wc -c < build.log) bytes"
           exit $RC
 
