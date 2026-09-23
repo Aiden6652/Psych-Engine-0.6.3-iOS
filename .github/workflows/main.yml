@@ -71,6 +71,24 @@ jobs:
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
 
+          echo "## 修 lime 的 run.n（git 装的 fork 里没有 run.n → haxelib run lime 会静默 exit 1）"
+          if [ ! -f "$HAXELIB_ROOT/lime/git/run.n" ]; then
+            haxelib install lime 7.9.0 --always || true
+            for f in "$HAXELIB_ROOT/lime/7,9,0/run.n" "$HAXELIB_ROOT/lime/8,3,2/run.n" "$HAXELIB_ROOT/lime/7,9,0/run.hx" "$HAXELIB_ROOT/lime/git/run.hx"; do
+              if [ -f "$f" ]; then
+                case "$f" in
+                  *.n) cp -f "$f" "$HAXELIB_ROOT/lime/git/run.n" && echo "已复制 $f -> lime/git/run.n" ;;
+                  *.hx) cp -f "$f" "$HAXELIB_ROOT/lime/git/run.hx" && echo "已复制 $f -> lime/git/run.hx" ;;
+                esac
+              fi
+            done
+          else
+            echo "lime/git/run.n 已存在"
+          fi
+          echo "--- lime/git 目录 ---"
+          ls -la "$HAXELIB_ROOT/lime/git/" | head -30
+          echo "--- 全盘找 run.n ---"
+          find "$HAXELIB_ROOT" -maxdepth 3 -name "run.n" 2>/dev/null | head -10
           echo "### haxelib 依赖列表"
           haxelib list
 
