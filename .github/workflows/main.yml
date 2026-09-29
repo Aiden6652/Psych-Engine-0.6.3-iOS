@@ -8,7 +8,7 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
 
@@ -51,7 +51,8 @@ jobs:
           set -Eeuo pipefail
 
           echo "## 安装核心依赖"
-          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
+          haxelib install lime 7.9.0 --always
+          haxelib set lime 7.9.0
           haxelib install openfl 9.1.0 --always
           haxelib install flixel 4.11.0 --always
           haxelib install flixel-addons 2.11.0 --always
@@ -134,8 +135,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          LIME_RUN="$HAXELIB_ROOT/lime/git/run.n"
-          echo "### lime .current = $(cat "$HAXELIB_ROOT/lime/.current" 2>&1)"
+          LIME_RUN="$(ls "$HAXELIB_ROOT"/lime/*/run.n 2>/dev/null | head -1)"
+          echo "### lime .current = $(cat "$HAXELIB_ROOT/lime/.current" 2>&1)   run=$LIME_RUN"
           ls -la "$LIME_RUN"
           echo "### 官方 7.9.0 的 run.n 能不能跑"
           neko "$HAXELIB_ROOT/lime/7,9,0/run.n" --version 2>&1 | head -5
@@ -148,12 +149,12 @@ jobs:
           echo "### 路线 A：neko 直跑 run.n --version"
           neko "$LIME_RUN" --version 2>&1 | head -5
           echo "A RC=${PIPESTATUS[0]}"
-          echo "### 路线 A：neko 直跑 build ios"
-          neko "$LIME_RUN" build ios -release -nosign 2>&1 | tee build.log
+          echo "### 路线 A：haxelib run lime build ios"
+          haxelib run lime build ios -release -nosign 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
-          if [ "$RC" -ne 0 ] || [ ! -s build.log ]; then
-            echo "### 路线 B（回退）：haxelib run lime"
-            haxelib run lime build ios -release -nosign 2>&1 | tee build.log
+          if [ "$RC" -ne 0 ] && [ ! -s build.log ]; then
+            echo "### 路线 B（回退）：neko 直跑"
+            neko "$LIME_RUN" build ios -release -nosign 2>&1 | tee build.log
             RC=${PIPESTATUS[0]}
           fi
           echo "lime build RC=$RC build.log=$(wc -c < build.log) bytes"
