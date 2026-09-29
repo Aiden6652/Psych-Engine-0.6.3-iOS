@@ -148,8 +148,10 @@ jobs:
             grep -nE "ARCHS|DEPLOYMENT_TARGET" "$PROJ" | sort -u | head -20
 
             echo "### 阶段 3：自己跑 xcodebuild（arm64 + 关签名）"
-            IOSDIR="$(dirname "$PROJ")"
-            cd "$IOSDIR"
+            IOSDIR="$(dirname "$(dirname "$PROJ")")"
+            echo "### 进目录：$IOSDIR"
+            cd "$IOSDIR" || exit 1
+            ls -d *.xcodeproj
             xcodebuild -project PsychEngine.xcodeproj -configuration Release \
               -sdk iphoneos -arch arm64 PLATFORM_NAME=iphoneos \
               CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
