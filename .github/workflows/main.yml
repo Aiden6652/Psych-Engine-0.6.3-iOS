@@ -76,22 +76,10 @@ jobs:
 
           echo "## 修 lime 的 run.n（git 装的 fork 里没有 run.n → haxelib run lime 会静默 exit 1）"
           if [ ! -f "$HAXELIB_ROOT/lime/git/run.n" ]; then
-            haxelib install lime 7.9.0 --always || true
-            for f in "$HAXELIB_ROOT/lime/7,9,0/run.n" "$HAXELIB_ROOT/lime/8,3,2/run.n" "$HAXELIB_ROOT/lime/7,9,0/run.hx" "$HAXELIB_ROOT/lime/git/run.hx"; do
-              if [ -f "$f" ]; then
-                case "$f" in
-                  *.n) cp -f "$f" "$HAXELIB_ROOT/lime/git/run.n" && echo "已复制 $f -> lime/git/run.n" ;;
-                  *.hx) cp -f "$f" "$HAXELIB_ROOT/lime/git/run.hx" && echo "已复制 $f -> lime/git/run.hx" ;;
-                esac
-              fi
+            for f in "$HAXELIB_ROOT/lime/7,9,0/run.n" "$HAXELIB_ROOT/lime/8,3,2/run.n"; do
+              if [ -f "$f" ]; then cp -f "$f" "$HAXELIB_ROOT/lime/git/run.n" && echo "已复制 $f -> lime/git/run.n"; fi
             done
-          else
-            echo "lime/git/run.n 已存在"
           fi
-          echo "--- lime/git 目录 ---"
-          ls -la "$HAXELIB_ROOT/lime/git/" | head -30
-          echo "--- 全盘找 run.n ---"
-          find "$HAXELIB_ROOT" -maxdepth 3 -name "run.n" 2>/dev/null | head -10
           echo "### haxelib 依赖列表"
           haxelib list
 
@@ -99,28 +87,20 @@ jobs:
         run: |
           set +e
           echo "### lime setup"
-          haxelib run lime setup -y < /dev/null 2>&1 | tail -30
+          haxelib run lime setup -y < /dev/null 2>&1 | tail -20
           echo "setup RC=${PIPESTATUS[0]}"
           echo "### lime 自检"
           haxelib run lime --version 2>&1 | tail -5
           echo "lime version RC=${PIPESTATUS[0]}"
-          echo "### neko"
-          which neko haxe haxelib || true
-          neko -version 2>&1 | head -2 || true
           echo "### lime 目录自检"
-          haxelib path lime 2>&1 | head -5
-          echo "path RC=$?"
-          ls -la "$HAXELIB_ROOT/lime/" 2>&1 | head -20
-          ls -la "$HAXELIB_ROOT/lime/run.n" 2>&1 || echo "!! 没有 run.n"
-          echo "--- haxelib.json ---"
-          head -c 400 "$HAXELIB_ROOT/lime/haxelib.json" 2>&1
-          echo
-          echo "--- 直接跑 run.n ---"
-          ( cd "$HAXELIB_ROOT/lime" && neko run.n --version 2>&1 | head -10 ; echo "neko RC=$?" )
+          cat "$HAXELIB_ROOT/lime/.current" 2>&1
+          haxelib path lime 2>&1 | head -3
 
       - name: 选择 Xcode
         run: |
-          set -Eeuo pipefail
+          set +e
+          echo "### 本机可用的 Xcode："
+          ls -d /Applications/Xcode*.app 2>/dev/null
           XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
           if [ -n "$XCODE_PATH" ]; then
             sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
@@ -135,29 +115,56 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          LIME_RUN="$(ls "$HAXELIB_ROOT"/lime/*/run.n 2>/dev/null | head -1)"
-          echo "### lime .current = $(cat "$HAXELIB_ROOT/lime/.current" 2>&1)   run=$LIME_RUN"
-          ls -la "$LIME_RUN"
-          echo "### 官方 7.9.0 的 run.n 能不能跑"
-          neko "$HAXELIB_ROOT/lime/7,9,0/run.n" --version 2>&1 | head -5
-          echo "官方 run.n RC=${PIPESTATUS[0]}"
-          echo "### 用官方 7.9.0 的 run.n 覆盖 fork 版（fork 的跑不起来）"
-          cp -f "$LIME_RUN" "$LIME_RUN.bak" 2>/dev/null || true
-          cp -f "$HAXELIB_ROOT/lime/7,9,0/run.n" "$LIME_RUN" && echo "已覆盖"
-          neko "$LIME_RUN" --version 2>&1 | head -5
-          echo "覆盖后 RC=${PIPESTATUS[0]}"
-          echo "### 路线 A：neko 直跑 run.n --version"
-          neko "$LIME_RUN" --version 2>&1 | head -5
-          echo "A RC=${PIPESTATUS[0]}"
-          echo "### 路线 A：haxelib run lime build ios"
+          export PATH="/usr/local/bin:$PATH"
+
+          echo "### 阶段 1：lime 生成工程并尝试构建"
+          echo "###   （官方 7.9.0 的 iOS 模板 ARCHS 写死含 armv7，Xcode 16 已把 armv7 当错误 → 这一步预计在 xcodebuild 阶段失败，正常）"
           haxelib run lime build ios -release -nosign 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ] && [ ! -s build.log ]; then
-            echo "### 路线 B（回退）：neko 直跑"
+            echo "### 回退：neko 直跑 run.n"
+            LIME_RUN="$(ls "$HAXELIB_ROOT"/lime/*/run.n 2>/dev/null | head -1)"
             neko "$LIME_RUN" build ios -release -nosign 2>&1 | tee build.log
             RC=${PIPESTATUS[0]}
           fi
-          echo "lime build RC=$RC build.log=$(wc -c < build.log) bytes"
+          echo "阶段1 lime RC=$RC  build.log=$(wc -c < build.log) bytes"
+
+          PROJ=""
+          for p in export/release/ios/PsychEngine.xcodeproj/project.pbxproj $(find export -maxdepth 5 -name project.pbxproj 2>/dev/null); do
+            if [ -f "$p" ]; then PROJ="$p"; break; fi
+          done
+          if [ -z "$PROJ" ]; then
+            echo "### lime 连 Xcode 工程都没生成，日志尾部："
+            tail -80 build.log
+            exit 1
+          fi
+          echo "### 工程文件：$PROJ"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "### 阶段 2：去掉工程里的 armv7（ARCHS=arm64、部署目标 13.0）"
+            cp -f "$PROJ" "$PROJ.bak"
+            perl -pi -e 's/\bARCHS\s*=\s*"[^"]*"/ARCHS = arm64/g; s/\bARCHS\s*=\s*[^;]*;/ARCHS = arm64;/g; s/\bVALID_ARCHS\b[^\n]*\n//g; s/IPHONEOS_DEPLOYMENT_TARGET = [\d.]+/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' "$PROJ"
+            echo "--- 改完后的 ARCHS / 部署目标 ---"
+            grep -nE "ARCHS|DEPLOYMENT_TARGET" "$PROJ" | sort -u | head -20
+
+            echo "### 阶段 3：自己跑 xcodebuild（arm64 + 关签名）"
+            IOSDIR="$(dirname "$PROJ")"
+            cd "$IOSDIR"
+            xcodebuild -project PsychEngine.xcodeproj -configuration Release \
+              -sdk iphoneos -arch arm64 PLATFORM_NAME=iphoneos \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+              build 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            RC=${PIPESTATUS[0]}
+            cd "$GITHUB_WORKSPACE"
+            echo "阶段3 xcodebuild RC=$RC"
+          fi
+
+          echo "### 找 app："
+          find export -maxdepth 7 -name "*.app" -type d | head -5
+          if [ "$RC" -ne 0 ]; then
+            echo "### 构建失败，日志尾部 120 行："
+            tail -120 build.log
+          fi
           exit $RC
 
       - name: 上传构建日志
