@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 拉取FunkinCrew基础assets（仅保证Freeplay有一首歌，防止黑屏）
+        run: |
+          git clone --depth=1 https://github.com/FunkinCrew/funkin.assets assets
+
       - name: 缓存 haxelib 库
         id: cache
         uses: actions/cache@v4
@@ -73,6 +77,10 @@ jobs:
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+          
+          # 新增hxCodec2.5.1
+          haxelib install hxCodec 2.5.1
+          haxelib set hxCodec 2.5.1
 
           echo "## 修 lime 的 run.n（git 装的 fork 里没有 run.n → haxelib run lime 会静默 exit 1）"
           if [ ! -f "$HAXELIB_ROOT/lime/git/run.n" ]; then
@@ -185,28 +193,4 @@ jobs:
       - name: 查找产物
         run: |
           set -Eeuo pipefail
-          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then
-            echo "### 未找到 .app"
-            find . -maxdepth 8 -name "*.app" -type d | head
-            exit 1
-          fi
-          echo "构建产物: $APP"
-
-      - name: 打包 IPA
-        run: |
-          set -Eeuo pipefail
-          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
-          echo "产物: $APP"
-          rm -rf Payload *.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          zip -qry PsychEngine_iOS_unsigned.ipa Payload
-          ls -lh *.ipa
-
-      - name: 上传 IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: PsychEngine_iOS_unsigned
-          path: PsychEngine_iOS_unsigned.ipa
-          retention-days: 14
+          APP=$(find
