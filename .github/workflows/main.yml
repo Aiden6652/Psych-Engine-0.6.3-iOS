@@ -17,6 +17,7 @@ jobs:
 
       - name: 拉取FunkinCrew基础assets（仅保证Freeplay有一首歌，防止黑屏）
         run: |
+          rm -rf assets
           git clone --depth=1 https://github.com/FunkinCrew/funkin.assets assets
 
       - name: 缓存 haxelib 库
@@ -193,4 +194,28 @@ jobs:
       - name: 查找产物
         run: |
           set -Eeuo pipefail
-          APP=$(find
+          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "### 未找到 .app"
+            find . -maxdepth 8 -name "*.app" -type d | head
+            exit 1
+          fi
+          echo "构建产物: $APP"
+
+      - name: 打包 IPA
+        run: |
+          set -Eeuo pipefail
+          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
+          echo "产物: $APP"
+          rm -rf Payload *.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry PsychEngine_iOS_unsigned.ipa Payload
+          ls -lh *.ipa
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsychEngine_iOS_unsigned
+          path: PsychEngine_iOS_unsigned.ipa
+          retention-days: 14
