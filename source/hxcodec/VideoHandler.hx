@@ -17,6 +17,12 @@ import sys.FileSystem;
  *   - hxvlc 自带 libvlc 的 iOS 静态库（libvlc_device.a），所以 iOS 上让它干活，
  *     再补一个同名的 VideoHandler，让老模组一行代码都不用改。
  *
+ * ⚠ hxvlc 版本要求：**必须 ≥ 1.9.3**（更推荐 2.x）。
+ *   原因：hxvlc 在 2024-06-30 的 PR #57（"Update android and ios libs to include visual module"）
+ *   之前，iOS/Android 的 libvlc 静态库里**没有 visual 模块**——
+ *   后果就是「能播出声音、但画面出不来」（黑屏），因为音频走 audio 模块、
+ *   视频输出依赖 visual 模块。当初 CI 用的 1.8.1 正好在修复之前，踩的就是这个坑。
+ *
  * 模组里常见写法都能继续用：
  *   var video:MP4Handler = new MP4Handler();
  *   video.finishCallback = function() { ... };
@@ -66,7 +72,10 @@ class VideoHandler extends FlxSubState
 		if (!FileSystem.exists(videoPath))
 			trace('[PE-iOS] 警告：这个路径在文件系统里不存在，视频可能播不出来');
 
-		video = new FlxVideoSprite(0, 0);
+		// 注意：这里刻意不传 (0, 0)。hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
+		// 传 (0, 0) 会被当成「instance=0, x=0」，类型不匹配直接编译失败；
+		// 而不传任何参数在 1.x / 2.x 下都合法（x/y 默认为 0）。
+		video = new FlxVideoSprite();
 		video.antialiasing = false;
 		add(video);
 
