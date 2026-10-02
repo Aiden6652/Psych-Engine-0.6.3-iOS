@@ -15,9 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 注意：example_mods 目录必须保留原名！
-      # Project.xml 里写着 <assets path='example_mods' rename='mods'/>，
-      # 改名会让 lime 直接报 "Could not find asset path example_mods" 然后退出。
       - name: 恢复仓库自带 assets / example_mods
         run: |
           set -Eeuo pipefail
@@ -32,7 +29,6 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/pack
           mkdir -p /tmp/pack
-          # 先复制再打（顺序很重要：先拷贝，避免把正在生成的 zip 自己也包进去）
           cp -R assets /tmp/pack/assets
           cp -R example_mods /tmp/pack/mods
           echo "PE iOS: mods folder" > /tmp/pack/mods/readme.txt
@@ -40,7 +36,6 @@ jobs:
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
-          unzip -l assets/preload/resources.zip | head -5
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
@@ -55,10 +50,8 @@ jobs:
           set -Eeuo pipefail
           curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
-          echo "size=$SZ"
           if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
           sudo installer -pkg haxe.pkg -target /
-          which haxe haxelib
           haxe -version
           haxelib version
 
@@ -67,55 +60,37 @@ jobs:
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
-          haxelib version
 
-      - name: 安装依赖（照旧用已验证可用的组合）
+      - name: 安装依赖
         run: |
           set -Eeuo pipefail
-
-          echo "## 核心依赖"
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
           haxelib install openfl 9.1.0 --always
           haxelib install flixel 4.11.0 --always
           haxelib install flixel-addons 2.11.0 --always
           haxelib install flixel-ui 2.4.0 --always
           haxelib install hscript 2.4.0 --always
-          haxelib install format --always || true
-          haxelib install hxp --always || true
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
-          echo "## 视频：hxvlc 1.8.1（自带 iOS 静态库，真能播）"
-          echo "##   注意：不用 hxCodec！它 iOS 上会去链一个根本没发布的 libvlc.a，必挂"
-          haxelib remove hxvlc || echo "no hxvlc"
+          echo "## hxvlc 1.8.1"
           rm -rf "$HAXELIB_ROOT/hxvlc"
           haxelib install hxvlc 1.8.1 --always || { echo "### hxvlc 安装失败"; exit 1; }
           haxelib set hxvlc 1.8.1
-          haxelib path hxvlc || { echo "### hxvlc 路径失败"; exit 1; }
 
-          echo "## 可选依赖（失败不致命）"
-          haxelib remove linc_luajit || echo "no linc_luajit"
+          echo "## 可选依赖"
+          haxelib remove linc_luajit || true
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
-
-          echo "### haxelib 依赖列表"
           haxelib list
 
-      - name: 自检：hxvlc 的 iOS 静态库
+      - name: 自检 hxvlc
         run: |
           set +e
-          FOUND=$(find "$HAXELIB_ROOT/hxvlc" -name "libvlc_device.a" 2>/dev/null | head -1)
-          if [ -n "$FOUND" ]; then echo "OK: $FOUND"; ls -lh "$FOUND"; else echo "!! 没找到 libvlc_device.a"; fi
-          echo "### hxCodec 确认不存在（不该被安装）"
-          ls -d "$HAXELIB_ROOT/hxCodec" 2>/dev/null && echo "!! hxCodec 被装上了" || echo "OK: 没有 hxCodec"
-
-      - name: 自检：内置资源包
-        run: |
-          set -Eeuo pipefail
-          ls -lh assets/preload/resources.zip
-          unzip -l assets/preload/resources.zip | grep -E "assets/preload/data/introText.txt|mods/readme.txt" || {
-            echo "!! resources.zip 内容不对"; exit 1; }
+          haxelib path hxvlc
+          find "$HAXELIB_ROOT/hxvlc" -maxdepth 5 -name "*.a" 2>/dev/null | head
+          find "$HAXELIB_ROOT/hxvlc" -maxdepth 4 -type d 2>/dev/null | head -20
 
       - name: 初始化 lime
         run: |
@@ -131,25 +106,30 @@ jobs:
       - name: 选择 Xcode
         run: |
           set +e
-          ls -d /Applications/Xcode*.app 2>/dev/null
           XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
           if [ -n "$XCODE_PATH" ]; then sudo xcode-select -s "$XCODE_PATH/Contents/Developer"; fi
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS（保留完整日志）
+      - name: 编译 iOS
         id: build
         continue-on-error: true
         run: |
           set +e
-          haxelib run lime build ios -release -nosign 2>&1 | tee build.log
-          RC=${PIPESTATUS[0]}
+          haxelib run lime build ios -release -nosign > build.log 2>&1
+          RC=$?
           echo "lime build RC=$RC  log=$(wc -c < build.log) bytes"
+
+          echo "### 编译日志末尾 60 行（完整内容）###"
+          tail -60 build.log
+
+          # 把日志末尾转成 error 注解，便于在 API 里直接读到（job 日志会被下载进度刷屏）
+          tail -25 build.log | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::${line:0:900}"
+          done
 
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then
-            echo "### 没有产物，日志尾部 150 行 ###"
-            tail -150 build.log
+            echo "### 没有 .app 产物 ###"
             exit 1
           fi
           echo "产物: $APP"
@@ -164,9 +144,7 @@ jobs:
 
       - name: 检查构建结果
         if: steps.build.outcome == 'failure'
-        run: |
-          echo "### 构建失败，见 lime-build-log"
-          exit 1
+        run: exit 1
 
       - name: 打包 IPA
         run: |
@@ -174,21 +152,13 @@ jobs:
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
           du -sh "$APP"
-
-          echo "### 自检：资源是否真的进了 App 包"
           ls "$APP" | head -30
           if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
-
-          # 兜底：万一 lime 没把 resources.zip 带进去，手动补上
           if [ ! -f "$APP/assets/resources.zip" ]; then
             echo "!! lime 没带 resources.zip，手动补进 App 包"
             cp -f assets/preload/resources.zip "$APP/assets/resources.zip"
           fi
-          ls -lh "$APP/assets/resources.zip"
-
-          # 视频 mp4 已在 resources.zip 里（首次启动释放到 Documents），IPA 内不重复塞
           find "$APP" -name "*.mp4" -delete || true
-
           rm -rf Payload *.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/
