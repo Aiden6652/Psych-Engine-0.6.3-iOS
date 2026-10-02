@@ -30,8 +30,22 @@ using StringTools;
 
 class Main extends Sprite
 {
-	/** [PE-iOS] 顶部黑边比例（对齐「无视频版」画面）。202/1668 = 0.121；改成 0.0 即恢复铺满。 */
-	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
+	/**
+	 * [PE-iOS] 目标画面宽高比（对齐「无视频版」）。
+	 *
+	 * 为什么是 16:9：
+	 *   实测「无视频版」在 iPad Pro 11"（2420x1668，宽高比 1.45）上的样子是：
+	 *     画面宽 2220、高约 1249（= 2220 * 9/16），垂直居中，
+	 *     上下各留 (1668-1249)/2 ≈ 209px 黑边，左右各留 100px。
+	 *   也就是说：它本来就是「16:9 的游戏画面在非 16:9 的 iPad 屏幕上自然地上下留黑」，
+	 *   不是「顶部刻意让出一段」。
+	 *
+	 * 之前用“顶部黑边比例”的做法（把画面拉满高度、只在上方留黑）是错的：
+	 *   会出现左右对上、但底部没有黑边、而且竖向视野偏大（角色显得小）的现象。
+	 *
+	 * 想恢复“铺满屏幕”：把本常量改为 0 即可（不做任何处理）。
+	 */
+	static inline var IOS_TARGET_ASPECT:Float = 16.0 / 9.0;
 
 	var game = {
 		width: 1280,
@@ -74,17 +88,19 @@ class Main extends Sprite
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// 顶部黑边：扣除一段可用高度，再把整个 FlxGame 下移同样像素
-		var topInset:Int = 0;
+		// [PE-iOS] 视口：按目标宽高比（16:9）算出可用高度，并在 stage 内垂直居中。
+		// stage 会被引擎整体缩放到屏幕：
+		//   stage 1024x768 → 屏幕 2224x1668（缩放 2.172），
+		//   所以 stage 内 96px 的上下留白，到屏幕上就是约 208px。
 		var viewHeight:Int = stageHeight;
-		if (IOS_TOP_INSET_RATIO > 0)
+		var yOffset:Int = 0;
+		if (IOS_TARGET_ASPECT > 0)
 		{
-			topInset = Std.int(stageHeight * IOS_TOP_INSET_RATIO);
-			viewHeight = stageHeight - topInset;
-			if (viewHeight < 1)
+			var targetH:Int = Std.int(stageWidth / IOS_TARGET_ASPECT);
+			if (targetH > 0 && targetH < stageHeight)
 			{
-				topInset = 0;
-				viewHeight = stageHeight;
+				viewHeight = targetH;
+				yOffset = Std.int((stageHeight - viewHeight) / 2);
 			}
 		}
 
@@ -97,7 +113,12 @@ class Main extends Sprite
 			game.height = Math.ceil(viewHeight / game.zoom);
 		}
 
-		trace('[PE-iOS] 视口：stage=' + stageWidth + 'x' + stageHeight + '，顶部黑边 ' + topInset + '，画布 ' + game.width + 'x' + game.height);
+		var info:String = 'stage=' + stageWidth + 'x' + stageHeight
+			+ '\nviewHeight=' + viewHeight
+			+ '\nyOffset=' + yOffset
+			+ '\ncanvas=' + game.width + 'x' + game.height
+			+ '\nzoom=' + game.zoom + '\n';
+		trace('[PE-iOS] 视口(16:9 居中)：' + info.replace('\n', ' '));
 
 		SUtil.doTheCheck();
 
@@ -106,28 +127,24 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// ==================== [PE-iOS] 顶部黑边 + 运行期诊断 ====================
-		// 上一版只在头 15 帧里纠正 flxGame.y，实测仍有偏差（下面会露出黑边），
-		// 所以这次：① 一直纠正（直到 600 帧）；② 在几个时间点把真实数值写进 pe_ios_viewport.txt，
-		// 包括 stage 尺寸、FlxG 尺寸、摄像机尺寸、FlxGame 的 x/y/scale —— 一眼就能看出是谁改的。
-		if (topInset > 0)
+		// ==================== [PE-iOS] 垂直居中 + 诊断 ====================
+		// 把 FlxGame 下移 yOffset（即上下各留一段黑边），前 600 帧内反复纠正，
+		// 并在第 5 / 30 / 120 / 300 帧把真实数值写进 pe_ios_viewport.txt。
+		if (yOffset > 0)
 		{
 			var frames:Int = 0;
 			var applier:Event->Void = null;
 			applier = function(e:Event):Void
 			{
-				flxGame.y = topInset;
+				flxGame.y = yOffset;
 				frames++;
 
-				// 5 / 30 / 120 / 300 帧时各记一次快照
 				if (frames == 5 || frames == 30 || frames == 120 || frames == 300)
 				{
 					try
 					{
 						var out:String = 'frame=' + frames + '\n'
-							+ 'stage=' + Lib.current.stage.stageWidth + 'x' + Lib.current.stage.stageHeight + '\n'
-							+ 'topInset=' + topInset + '\n'
-							+ 'gameBox=' + game.width + 'x' + game.height + '\n'
+							+ info
 							+ 'FlxG=' + FlxG.width + 'x' + FlxG.height + '\n'
 							+ 'cam0=' + (FlxG.camera != null ? (FlxG.camera.width + 'x' + FlxG.camera.height) : 'null') + '\n'
 							+ 'game.x=' + flxGame.x + ' game.y=' + flxGame.y + '\n'
@@ -145,8 +162,8 @@ class Main extends Sprite
 		}
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
-		if (topInset > 0)
-			fpsVar.y = topInset + 3;
+		if (yOffset > 0)
+			fpsVar.y = yOffset + 3;
 		addChild(fpsVar);
 		Lib.current.stage.align = "tl";
 		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
