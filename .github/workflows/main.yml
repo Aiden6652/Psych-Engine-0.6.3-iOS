@@ -36,13 +36,7 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/pack
           mkdir -p /tmp/pack/assets
-          # 关键修正：解压后必须是 <Documents>/assets/<...>（例如 assets/music/freakyMenu.ogg），
-          # 不能多一层 preload。运行时 Paths.getPath()/returnSound() 全按 assets/… 找文件，
-          # 多一层 preload 就会「找不到 freakyMenu.ogg → 抛异常 → 每 2 秒崩一次的循环」。
-          # 仓库里这些资源放在 assets/preload/ 下（那是 OpenFL 的资源前缀），
-          # 所以打 zip 时把 preload 里的内容平移到 assets/ 根下。
           cp -R assets/preload/. /tmp/pack/assets/
-          # 字体在 assets/fonts（不在 preload 里），运行时按 assets/fonts/… 读，也要带上
           if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
           cp -R example_mods /tmp/pack/mods
           echo "PE iOS: mods folder" > /tmp/pack/mods/readme.txt
@@ -52,13 +46,12 @@ jobs:
           ls -lh assets/preload/resources.zip
           echo "### zip 内容抽样（确认没有 preload 这一层）###"
           unzip -l assets/preload/resources.zip | head -15
-          unzip -l assets/preload/resources.zip | grep -E "assets/(music|sounds)/" | head -8 || true
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v10
+          key: psych063-haxelib-v11
           restore-keys: |
             psych063-haxelib-
 
@@ -89,10 +82,15 @@ jobs:
           haxelib install hscript 2.4.0 --always
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
-          echo "## hxvlc 1.8.1"
+          # hxvlc 必须 >= 1.9.3（推荐 2.x）：
+          # 2024-06-30 的 PR #57（"Update android and ios libs to include visual module"）
+          # 之前，iOS/Android 的 libvlc 静态库不含 visual 模块，
+          # 症状就是「能播出声音、但画面出不来」（黑屏）。
+          # 原先用的 1.8.1 正好在修复之前，所以踩了这个坑。
+          echo "## hxvlc 2.3.1（含 iOS visual 模块）"
           rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 1.8.1 --always || { echo "### hxvlc 安装失败"; exit 1; }
-          haxelib set hxvlc 1.8.1
+          haxelib install hxvlc 2.3.1 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 2.3.1
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
@@ -106,8 +104,8 @@ jobs:
         run: |
           set +e
           haxelib path hxvlc
-          find "$HAXELIB_ROOT/hxvlc" -maxdepth 5 -name "*.a" 2>/dev/null | head
-          find "$HAXELIB_ROOT/hxvlc" -maxdepth 4 -type d 2>/dev/null | head -20
+          echo "### iOS 静态库（新版应明显更大）###"
+          find "$HAXELIB_ROOT" -path "*hxvlc*" -name "*.a" -exec ls -lh {} \; 2>/dev/null | head
 
       - name: 初始化 lime
         run: |
@@ -135,25 +133,17 @@ jobs:
           haxelib run lime build ios -release -nosign > build.log 2>&1
           RC=$?
           echo "lime build RC=$RC  log=$(wc -c < build.log) bytes"
-
-          echo "### 编译日志末尾 60 行（完整内容）###"
+          echo "### 编译日志末尾 60 行 ###"
           tail -60 build.log
-
           echo "### Haxe 报错行（.hx:行号）###"
           grep -nE '\.hx:[0-9]+' build.log | tail -40
-
-          echo "### make / 链接 报错行 ###"
+          echo "### 链接报错行 ###"
           grep -nE '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: ' build.log | tail -20
-
-          # 把真正的报错行转成 error 注解，便于在 API 里直接读到。
-          # 优先抓 Haxe 的 xxx.hx:行号 报错（Xcode 的 export 噪音会把日志末尾刷满）；
-          # 没有 Haxe 报错时再退回日志末尾，兼容链接期 / 原生编译期错误。
           ERR="$(grep -E '\.hx:[0-9]+' build.log | tail -40)"
           if [ -z "$ERR" ]; then ERR="$(tail -25 build.log)"; fi
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
-
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then
             echo "### 没有 .app 产物 ###"
@@ -179,7 +169,6 @@ jobs:
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
           du -sh "$APP"
-          ls "$APP" | head -30
           if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
           if [ ! -f "$APP/assets/resources.zip" ]; then
             echo "lime 没带 resources.zip，手动补进 App 包"
