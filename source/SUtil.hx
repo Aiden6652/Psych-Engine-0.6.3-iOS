@@ -100,10 +100,13 @@ class SUtil
 	static function unzipInto(bytes:Bytes, destDir:String):Int
 	{
 		var count:Int = 0;
-		var entries:Array<haxe.zip.Entry> = null;
+		// haxe.zip.Reader.read() 返回的是 haxe.ds.List<Entry>（Haxe 4.2 / 4.3 都一样），
+		// 不能直接赋给 Array，否则报：List<Entry> should be Array<Entry>。
+		// 这里用数组推导转一遍，两个 Haxe 版本都能编译。
+		var entries:Array<haxe.zip.Entry> = [];
 		try
 		{
-			entries = new haxe.zip.Reader(new haxe.io.BytesInput(bytes)).read();
+			entries = [for (e in new haxe.zip.Reader(new haxe.io.BytesInput(bytes)).read()) e];
 		}
 		catch (e:Dynamic)
 		{
@@ -117,12 +120,19 @@ class SUtil
 			var name:String = entry.fileName.split('\\').join('/');
 			if (name.length < 1 || name.charAt(name.length - 1) == '/') continue; // 目录项跳过
 
-			var data:Bytes = entry.data;
-			if (data != null)
+			// Reader 读出来的是「压缩状态」的数据，要用 haxe.zip.Tools.uncompress(entry) 解压。
+			// 注意：它的参数是整个 Entry（原地解压并把结果写回 entry.data），不是 Bytes。
+			if (entry.compressed)
 			{
-				// 压缩过的条目需要解压；没压缩的（stored）解压会抛异常，直接用原数据
-				try { data = haxe.zip.Tools.uncompress(data); } catch (e:Dynamic) {}
+				try { haxe.zip.Tools.uncompress(entry); }
+				catch (e:Dynamic)
+				{
+					trace('[PE-iOS] 解压条目失败 ' + name + ': ' + e);
+					continue;
+				}
 			}
+
+			var data:Bytes = entry.data;
 			if (data == null) continue;
 
 			var out:String = destDir + name;
