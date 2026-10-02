@@ -47,44 +47,56 @@ class SUtil
 	}
 
 	// ==================== [PE-iOS] 首次启动自动释放内置资源 ====================
-	// 旧逻辑：必须手动把 Assets.zip 解压到 Documents 下才有 assets / mods，
-	// 否则一进游戏就弹窗「you didn't extract the files from the Assets .zip」然后退出。
-	// 新逻辑：App 包里自带一份 resources.zip（CI 打的），首次启动自动解开，
-	// 用户装完 IPA 直接就能玩，不再需要手动解压。
+	// 只在「全新安装」（Documents 下 assets 和 mods 都不存在）时，把 App 包里自带的
+	// resources.zip 解开，用户装完 IPA 直接就能玩，不用手动解压。
+	//
+	// 两条铁律（都是踩过的坑）：
+	//   1) 只缺一个文件夹时**绝不重新解压**，只补一个空文件夹。
+	//      * 否则用户把 mods 改名做「禁用模组」测试，引擎立刻又把 mods 重建回来，测试白做；
+	//      * 更糟的是会把用户自己放进去的 assets 一并覆盖成内置占位版。
+	//   2) 解压时遇到已存在的文件一律跳过，绝不覆盖用户文件。
 	#if ios
 	public static function ensureAssets():Void
 	{
 		var base:String = getPath();
 		if (base == null || base.length < 1) return;
 
-		var marker:String = base + 'pe_ios_assets_done.txt';
-		if (FileSystem.exists(marker) && FileSystem.exists(base + 'assets') && FileSystem.exists(base + 'mods'))
-			return;
+		var hasAssets:Bool = FileSystem.exists(base + 'assets');
+		var hasMods:Bool = FileSystem.exists(base + 'mods');
 
-		var bytes:Bytes = null;
-		for (id in ['assets/resources.zip', 'resources.zip', 'assets/preload/resources.zip'])
+		if (hasAssets && hasMods)
+			return; // 已经装好了，什么都不做
+
+		if (!hasAssets && !hasMods)
 		{
-			try { bytes = OpenFlAssets.getBytes(id); } catch (e:Dynamic) { bytes = null; }
+			// 全新安装：找 App 包里的内置 resources.zip
+			var bytes:Bytes = null;
+			for (id in ['assets/resources.zip', 'resources.zip', 'assets/preload/resources.zip'])
+			{
+				try { bytes = OpenFlAssets.getBytes(id); } catch (e:Dynamic) { bytes = null; }
+				if (bytes != null && bytes.length > 16)
+				{
+					trace('[PE-iOS] 找到内置资源包: ' + id + ' (' + bytes.length + ' bytes)');
+					break;
+				}
+				bytes = null;
+			}
+
 			if (bytes != null && bytes.length > 16)
 			{
-				trace('[PE-iOS] 找到内置资源包: ' + id + ' (' + bytes.length + ' bytes)');
-				break;
+				trace('[PE-iOS] 全新安装：正在释放内置资源到 ' + base + ' ...');
+				var count:Int = unzipInto(bytes, base);
+				trace('[PE-iOS] 资源释放完成，共 ' + count + ' 个文件');
 			}
-			bytes = null;
+			else
+			{
+				trace('[PE-iOS] 没有内置 resources.zip，跳过自动释放（将使用旧的手动解压方式）');
+			}
 		}
-
-		if (bytes == null || bytes.length < 16)
+		else
 		{
-			trace('[PE-iOS] 没有内置 resources.zip，跳过自动释放（将使用旧的手动解压方式）');
-			return;
-		}
-
-		trace('[PE-iOS] 首次启动：正在释放内置资源到 ' + base + ' ...');
-		var count:Int = unzipInto(bytes, base);
-		if (count > 0)
-		{
-			try { File.saveContent(marker, 'released ' + count + ' files'); } catch (e:Dynamic) {}
-			trace('[PE-iOS] 资源释放完成，共 ' + count + ' 个文件');
+			// 只缺一侧：说明是已有安装（用户手动删/改过），只补空目录，绝不重新解压
+			trace('[PE-iOS] 只缺一侧文件夹，仅补空目录，不重新解压（保护用户数据）');
 		}
 
 		if (!FileSystem.exists(base + 'mods'))
@@ -136,6 +148,8 @@ class SUtil
 			if (data == null) continue;
 
 			var out:String = destDir + name;
+			if (FileSystem.exists(out)) continue; // 已存在就不覆盖（保护用户文件）
+
 			var slash:Int = out.lastIndexOf('/');
 			if (slash > 0) mkdirs(out.substring(0, slash));
 

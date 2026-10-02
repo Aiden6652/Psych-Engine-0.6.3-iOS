@@ -24,18 +24,35 @@ jobs:
           echo "assets 文件数: $(find assets -type f | wc -l)"
           echo "example_mods 文件数: $(find example_mods -type f | wc -l)"
 
-      - name: 打包内置资源 resources.zip（zip 里 mods 用重命名后的副本）
+      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+        run: |
+          set -Eeuo pipefail
+          python3 tools/patch_lua_guard.py
+          echo "### 加固后的行数统计"
+          grep -c "LuaGuard" source/FunkinLua.hx || true
+
+      - name: 打包内置资源 resources.zip（按游戏目录结构：assets/… 与 mods/…）
         run: |
           set -Eeuo pipefail
           rm -rf /tmp/pack
-          mkdir -p /tmp/pack
-          cp -R assets /tmp/pack/assets
+          mkdir -p /tmp/pack/assets
+          # 关键修正：解压后必须是 <Documents>/assets/<...>（例如 assets/music/freakyMenu.ogg），
+          # 不能多一层 preload。运行时 Paths.getPath()/returnSound() 全按 assets/… 找文件，
+          # 多一层 preload 就会「找不到 freakyMenu.ogg → 抛异常 → 每 2 秒崩一次的循环」。
+          # 仓库里这些资源放在 assets/preload/ 下（那是 OpenFL 的资源前缀），
+          # 所以打 zip 时把 preload 里的内容平移到 assets/ 根下。
+          cp -R assets/preload/. /tmp/pack/assets/
+          # 字体在 assets/fonts（不在 preload 里），运行时按 assets/fonts/… 读，也要带上
+          if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
           cp -R example_mods /tmp/pack/mods
           echo "PE iOS: mods folder" > /tmp/pack/mods/readme.txt
           ( cd /tmp/pack && zip -qry /tmp/resources.zip assets mods )
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
+          echo "### zip 内容抽样（确认没有 preload 这一层）###"
+          unzip -l assets/preload/resources.zip | head -15
+          unzip -l assets/preload/resources.zip | grep -E "assets/(music|sounds)/" | head -8 || true
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
