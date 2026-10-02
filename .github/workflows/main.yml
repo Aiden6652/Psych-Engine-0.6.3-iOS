@@ -32,9 +32,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "PE iOS: mods folder" > mods/readme.txt
-          zip -qry resources.zip assets mods
-          ls -lh resources.zip
-          unzip -l resources.zip | head -5
+          # 先在 /tmp 里打，避免把正在写的 zip 自己也包进去
+          zip -qry /tmp/resources.zip assets mods
+          mkdir -p assets/preload
+          mv /tmp/resources.zip assets/preload/resources.zip
+          ls -lh assets/preload/resources.zip
+          unzip -l assets/preload/resources.zip | head -5
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
@@ -121,8 +124,8 @@ jobs:
       - name: 校验内置资源包
         run: |
           set -Eeuo pipefail
-          ls -lh resources.zip
-          unzip -l resources.zip | grep -E "assets/preload/data/introText.txt|mods/readme.txt" || {
+          ls -lh assets/preload/resources.zip
+          unzip -l assets/preload/resources.zip | grep -E "assets/preload/data/introText.txt|mods/readme.txt" || {
             echo "!! resources.zip 内容不对"; exit 1; }
 
       - name: 初始化 lime
@@ -178,12 +181,21 @@ jobs:
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
           du -sh "$APP"
-          # 视频 mp4 只放在 resources.zip 里（首次启动自动释放），IPA 内不重复塞一份
+
+          # 视频 mp4 只放 resources.zip 里（首次启动自动释放），IPA 内不重复塞
           find "$APP" -name "*.mp4" -delete || true
+
           echo "### 自检：资源是否真的进了 App 包"
           ls "$APP" | head -30
           if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
-          if [ ! -f "$APP/resources.zip" ]; then echo "!! App 包里没有 resources.zip"; exit 1; fi
+
+          # 兜底：万一 lime 没把 resources.zip 带进去，手动补上
+          if [ ! -f "$APP/assets/resources.zip" ]; then
+            echo "!! lime 没带 resources.zip，手动补进 App 包"
+            cp -f assets/preload/resources.zip "$APP/assets/resources.zip"
+          fi
+          ls -lh "$APP/assets/resources.zip"
+
           rm -rf Payload *.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/
