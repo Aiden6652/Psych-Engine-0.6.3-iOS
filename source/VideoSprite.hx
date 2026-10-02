@@ -48,6 +48,11 @@ class VideoSprite extends FlxSpriteGroup {
 		// initialize sprites
 		videoSprite = new FlxVideoSprite();
 		videoSprite.antialiasing = ClientPrefs.globalAntialiasing;
+		// [PE-iOS] 关键修复：视频必须钉在屏幕上。
+		// FlxVideoSprite 默认 scrollFactor = (1,1)（跟随世界坐标），
+		// 而 FlxSpriteGroup 的 scrollFactor 不会传递给子对象，
+		// 所以打歌时相机跟随角色滚动，画面会被卷出屏幕 -> 只剩声音。
+		videoSprite.scrollFactor.set(0, 0);
 		add(videoSprite);
 		if(canSkip) this.canSkip = true;
 
@@ -56,9 +61,20 @@ class VideoSprite extends FlxSpriteGroup {
 
 		videoSprite.bitmap.onFormatSetup.add(function()
 		{
+			if (videoSprite == null || videoSprite.bitmap == null) return;
+			var bmd = videoSprite.bitmap.bitmapData;
+			// 防御：尺寸异常时不缩放（否则可能算出 NaN -> setGraphicSize(0,0) -> 不可见）
+			if (bmd != null && (bmd.width < 2 || bmd.height < 2))
+			{
+				videoSprite.updateHitbox();
+				videoSprite.screenCenter();
+				videoSprite.scrollFactor.set(0, 0);
+				return;
+			}
 			videoSprite.setGraphicSize(FlxG.width);
 			videoSprite.updateHitbox();
 			videoSprite.screenCenter();
+			videoSprite.scrollFactor.set(0, 0); // 缩放后再次确保
 		});
 
 		// start video and adjust resolution to screen size
@@ -129,7 +145,7 @@ class VideoSprite extends FlxSpriteGroup {
 		super.update(elapsed);
 	}
 
-	function set_canSkip(newValue:Bool)
+	function set_canSkip(newValue:Bool):Bool
 	{
 		canSkip = newValue;
 		if(canSkip)
@@ -141,6 +157,7 @@ class VideoSprite extends FlxSpriteGroup {
 				skipSprite.x = FlxG.width - (skipSprite.width + 80);
 				skipSprite.y = FlxG.height - (skipSprite.height + 72);
 				skipSprite.amount = 0;
+				skipSprite.scrollFactor.set(0, 0);
 				add(skipSprite);
 			}
 		}
