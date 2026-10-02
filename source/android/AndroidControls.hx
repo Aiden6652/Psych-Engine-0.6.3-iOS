@@ -19,7 +19,10 @@ class Config {
 	public function getcontrolmode():Int {
 		if (save.data.buttonsmode != null) 
 			return save.data.buttonsmode[0];
-		return 0;
+		// [PE-iOS] 默认触控改为 HITBOX（4 个横向大按键），而不是 0 = VIRTUALPAD_RIGHT（十字方向键）。
+		// 原因：手机上十字方向键难按、档住画面，hitbox 才是标准手机玩法；
+		// 用户仍可在「设置 → 移动端控制」里改成其它模式（会写入 save，优先级高于这里的默认值）。
+		return 4;
 	}
 
 	public function setcontrolmode(mode:Int = 0):Int {
