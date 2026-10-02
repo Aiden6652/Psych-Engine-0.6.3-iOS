@@ -80,7 +80,11 @@ class VideoHandler extends FlxSubState
 				if (bmd == null) return;
 				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
 				if (scale <= 0) scale = 1;
-				video.setGraphicSize(bmd.width * scale, bmd.height * scale);
+				// setGraphicSize(?Width:Int, ?Height:Int) 的参数是 Int，
+				// 而 bmd.width * scale 是 Float —— Haxe 不会隐式取整，
+				// 直接传会报「Float should be Int」，所以必须 Std.int()。
+				// 同时保证至少 1 像素，避免算出 0 导致缩放无效。
+				video.setGraphicSize(Std.int(Math.max(1, bmd.width * scale)), Std.int(Math.max(1, bmd.height * scale)));
 				video.updateHitbox();
 				video.screenCenter();
 			});
