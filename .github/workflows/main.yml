@@ -1,4 +1,4 @@
-name: Psych Engine 0.6.3 iOS Build
+name: Psych Engine 0.6.3 iOS (hxvlc real video)
 
 on:
   push:
@@ -8,26 +8,41 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-    timeout-minutes: 300
+    timeout-minutes: 350
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      # hxvlc 固定到 2023-09 的提交：自带 iOS 静态库(libvlc_device.a)、API 稳定，
+      # 且不需要 nullSafety（Haxe 4.2.4 不支持该宏）
+      HXVLC_REF: 6807fd692b8affbe6636533e56f5bbf2f52675ec
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 拉取FunkinCrew基础assets（仅保证Freeplay有一首歌，防止黑屏）
+      - name: 恢复仓库自带 assets / mods（不要用 FunkinCrew 覆盖，歌单不匹配会黑屏）
         run: |
-          rm -rf assets
-          git clone --depth=1 https://github.com/FunkinCrew/funkin.assets assets
+          set -Eeuo pipefail
+          rm -rf assets mods assets.zip resources.zip
+          git checkout -f HEAD -- assets
+          git checkout -f HEAD -- example_mods
+          mv example_mods mods
+          echo "assets 文件数: $(find assets -type f | wc -l)"
+          echo "mods 文件数: $(find mods -type f | wc -l)"
+
+      - name: 打包内置资源 resources.zip（首次启动自动释放，免手动解压）
+        run: |
+          set -Eeuo pipefail
+          echo "PE iOS: mods folder" > mods/readme.txt
+          zip -qry resources.zip assets mods
+          ls -lh resources.zip
+          unzip -l resources.zip | head -5
 
       - name: 缓存 haxelib 库
-        id: cache
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v9
+          key: psych063-ios-hxvlc-${{ env.HXVLC_REF }}
           restore-keys: |
-            psych063-haxelib-
+            psych063-ios-hxvlc-
 
       - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
@@ -35,10 +50,7 @@ jobs:
           curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           echo "size=$SZ"
-          if [ "$SZ" -lt 1000000 ]; then
-            echo "下载异常"
-            exit 1
-          fi
+          if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
           sudo installer -pkg haxe.pkg -target /
           which haxe haxelib
           haxe -version
@@ -55,7 +67,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          echo "## 安装核心依赖"
+          echo "## 核心依赖"
           haxelib install lime 7.9.0 --always
           haxelib set lime 7.9.0
           haxelib install openfl 9.1.0 --always
@@ -65,117 +77,86 @@ jobs:
           haxelib install hscript 2.4.0 --always
           haxelib install format --always
           haxelib install hxp --always || true
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main || {
-            echo "hxcpp 安装失败"
-            exit 1
-          }
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
-          echo "## 安装可选依赖（失败不致命）"
-          haxelib remove hxvlc || echo "no hxvlc"
-          haxelib remove hxCodec || echo "no hxCodec"
-          rm -rf "$HAXELIB_ROOT/hxvlc" "$HAXELIB_ROOT/hxCodec"
+          echo "## hxCodec（仅用于满足 Project.xml 的 <haxelib name=\"hxCodec\" />）"
+          echo "##   它的 iOS 实现没有链 libvlc，真正的播放在 source/hxcodec/VideoHandler.hx 兼容层"
+          ok=0
+          for v in 2.5.1 2.5.0 3.0.2 3.0.0 1.8.1; do
+            if haxelib install hxCodec $v --always >/dev/null 2>&1; then ok=1; echo "hxCodec $v 已安装"; break; fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            if haxelib install hxCodec --always >/dev/null 2>&1; then ok=1; echo "hxCodec latest 已安装"; fi
+          fi
+          [ "$ok" -eq 1 ] || { echo "hxCodec 装不上，Project.xml 会报错"; exit 1; }
+
+          echo "## hxvlc（iOS 上有真 libvlc 静态库，负责真实播放）"
+          haxelib git hxvlc https://github.com/MAJigsaw77/hxvlc.git "$HXVLC_REF"
+
+          echo "## Lua / 模组 / 其他"
+          haxelib remove linc_luajit || true
           haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
-          
-          # 新增hxCodec2.5.1
-          haxelib install hxCodec 2.5.1
-          haxelib set hxCodec 2.5.1
 
-          echo "## 修 lime 的 run.n（git 装的 fork 里没有 run.n → haxelib run lime 会静默 exit 1）"
-          if [ ! -f "$HAXELIB_ROOT/lime/git/run.n" ]; then
-            for f in "$HAXELIB_ROOT/lime/7,9,0/run.n" "$HAXELIB_ROOT/lime/8,3,2/run.n"; do
-              if [ -f "$f" ]; then cp -f "$f" "$HAXELIB_ROOT/lime/git/run.n" && echo "已复制 $f -> lime/git/run.n"; fi
-            done
-          fi
-          echo "### haxelib 依赖列表"
+          echo "### haxelib 列表"
           haxelib list
+
+      - name: 校验 hxvlc 的 iOS 静态库
+        run: |
+          set -Eeuo pipefail
+          for d in "$HAXELIB_ROOT/hxvlc/git" "$HAXELIB_ROOT/hxvlc/"*; do
+            if [ -d "$d/project/vlc/lib/iOS" ]; then
+              echo "hxvlc 路径: $d"
+              ls -lh "$d/project/vlc/lib/iOS/"
+              if [ ! -f "$d/project/vlc/lib/iOS/libvlc_device.a" ]; then
+                echo "!! 缺少 libvlc_device.a，iOS 链接会失败"; exit 1
+              fi
+              exit 0
+            fi
+          done
+          echo "!! hxvlc 里找不到 iOS 静态库目录"; exit 1
+
+      - name: 校验内置资源包
+        run: |
+          set -Eeuo pipefail
+          ls -lh resources.zip
+          unzip -l resources.zip | grep -E "assets/preload/data/introText.txt|mods/readme.txt" || {
+            echo "!! resources.zip 内容不对"; exit 1; }
 
       - name: 初始化 lime
         run: |
           set +e
-          echo "### lime setup"
           haxelib run lime setup -y < /dev/null 2>&1 | tail -20
-          echo "setup RC=${PIPESTATUS[0]}"
-          echo "### lime 自检"
           haxelib run lime --version 2>&1 | tail -5
-          echo "lime version RC=${PIPESTATUS[0]}"
-          echo "### lime 目录自检"
-          cat "$HAXELIB_ROOT/lime/.current" 2>&1
-          haxelib path lime 2>&1 | head -3
 
       - name: 选择 Xcode
         run: |
           set +e
-          echo "### 本机可用的 Xcode："
           ls -d /Applications/Xcode*.app 2>/dev/null
           XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
-          if [ -n "$XCODE_PATH" ]; then
-            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-          else
-            echo "未找到 Xcode.app，继续使用默认工具链"
-          fi
+          if [ -n "$XCODE_PATH" ]; then sudo xcode-select -s "$XCODE_PATH/Contents/Developer"; fi
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: 编译 iOS（保留完整日志）
+      - name: 编译 iOS
         id: build
         continue-on-error: true
         run: |
           set +e
           export PATH="/usr/local/bin:$PATH"
-
-          echo "### 阶段 1：lime 生成工程并尝试构建"
-          echo "###   （官方 7.9.0 的 iOS 模板 ARCHS 写死含 armv7，Xcode 16 已把 armv7 当错误 → 这一步预计在 xcodebuild 阶段失败，正常）"
           haxelib run lime build ios -release -nosign 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
-          if [ "$RC" -ne 0 ] && [ ! -s build.log ]; then
-            echo "### 回退：neko 直跑 run.n"
-            LIME_RUN="$(ls "$HAXELIB_ROOT"/lime/*/run.n 2>/dev/null | head -1)"
-            neko "$LIME_RUN" build ios -release -nosign 2>&1 | tee build.log
-            RC=${PIPESTATUS[0]}
-          fi
-          echo "阶段1 lime RC=$RC  build.log=$(wc -c < build.log) bytes"
+          echo "lime build RC=$RC  log=$(wc -c < build.log) bytes"
 
-          PROJ=""
-          for p in export/release/ios/PsychEngine.xcodeproj/project.pbxproj $(find export -maxdepth 5 -name project.pbxproj 2>/dev/null); do
-            if [ -f "$p" ]; then PROJ="$p"; break; fi
-          done
-          if [ -z "$PROJ" ]; then
-            echo "### lime 连 Xcode 工程都没生成，日志尾部："
-            tail -80 build.log
+          APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "### 没有产物，日志尾部 150 行 ###"
+            tail -150 build.log
             exit 1
           fi
-          echo "### 工程文件：$PROJ"
-
-          if [ "$RC" -ne 0 ]; then
-            echo "### 阶段 2：去掉工程里的 armv7（ARCHS=arm64、部署目标 13.0）"
-            cp -f "$PROJ" "$PROJ.bak"
-            perl -pi -e 's/\bARCHS\s*=\s*"[^"]*"/ARCHS = arm64/g; s/\bARCHS\s*=\s*[^;]*;/ARCHS = arm64;/g; s/\bVALID_ARCHS\b[^\n]*\n//g; s/IPHONEOS_DEPLOYMENT_TARGET = [\d.]+/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' "$PROJ"
-            echo "--- 改完后的 ARCHS / 部署目标 ---"
-            grep -nE "ARCHS|DEPLOYMENT_TARGET" "$PROJ" | sort -u | head -20
-
-            echo "### 阶段 3：自己跑 xcodebuild（arm64 + 关签名）"
-            IOSDIR="$(dirname "$(dirname "$PROJ")")"
-            echo "### 进目录：$IOSDIR"
-            cd "$IOSDIR" || exit 1
-            ls -d *.xcodeproj
-            xcodebuild -project PsychEngine.xcodeproj -configuration Release \
-              -sdk iphoneos -arch arm64 PLATFORM_NAME=iphoneos \
-              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
-              build 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-            RC=${PIPESTATUS[0]}
-            cd "$GITHUB_WORKSPACE"
-            echo "阶段3 xcodebuild RC=$RC"
-          fi
-
-          echo "### 找 app："
-          find export -maxdepth 7 -name "*.app" -type d | head -5
-          if [ "$RC" -ne 0 ]; then
-            echo "### 构建失败，日志尾部 120 行："
-            tail -120 build.log
-          fi
+          echo "产物: $APP"
           exit $RC
 
       - name: 上传构建日志
@@ -188,28 +169,25 @@ jobs:
       - name: 检查构建结果
         if: steps.build.outcome == 'failure'
         run: |
-          echo "### lime 构建失败"
+          echo "### 构建失败，见 lime-build-log"
           exit 1
-
-      - name: 查找产物
-        run: |
-          set -Eeuo pipefail
-          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then
-            echo "### 未找到 .app"
-            find . -maxdepth 8 -name "*.app" -type d | head
-            exit 1
-          fi
-          echo "构建产物: $APP"
 
       - name: 打包 IPA
         run: |
           set -Eeuo pipefail
-          APP=$(find export -maxdepth 7 -name "*.app" -type d | head -n 1)
+          APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           echo "产物: $APP"
+          du -sh "$APP"
+          # 视频 mp4 只放在 resources.zip 里（首次启动自动释放），IPA 内不重复塞一份
+          find "$APP" -name "*.mp4" -delete || true
+          echo "### 自检：资源是否真的进了 App 包"
+          ls "$APP" | head -30
+          if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
+          if [ ! -f "$APP/resources.zip" ]; then echo "!! App 包里没有 resources.zip"; exit 1; fi
           rm -rf Payload *.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/
+          find Payload -exec touch -t 202401010000 {} +
           zip -qry PsychEngine_iOS_unsigned.ipa Payload
           ls -lh *.ipa
 
