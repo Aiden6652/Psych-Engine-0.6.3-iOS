@@ -30,33 +30,20 @@ using StringTools;
 
 class Main extends Sprite
 {
-	/**
-	 * [PE-iOS] 顶部黑边比例（用于对齐「无视频版」画面）。
-	 *
-	 * 背景：实测两版 IPA 在同一台 iPad（2420x1668）上对比——
-	 *   有视频版：游戏视口 2220x1668（铺满整屏高）→ 内部画布 1280x962，角色显得小；
-	 *   无视频版：游戏视口 2220x1465（顶部留 202px 黑边）→ 画布 1280x845，角色更大更「近」。
-	 * 两版缩放倍数相同（1.734x），差别只在视口高度，所以只要把顶部按比例压掉一段，
-	 * 就能得到与无视频版完全一致（含黑边）的画面。
-	 *
-	 * 202 / 1668 = 0.121（即视口占屏高 87.9%）。
-	 * 想恢复成铺满屏幕：把本常量改成 0.0 即可（无需改其它代码）。
-	 */
+	/** [PE-iOS] 顶部黑边比例（对齐「无视频版」画面）。202/1668 = 0.121；改成 0.0 即恢复铺满。 */
 	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
 
 	var game = {
-		width: 1280, // WINDOW width
-		height: 720, // WINDOW height
-		initialState: TitleState, // initial game state
-		zoom: -1.0, // game state bounds
-		framerate: 60, // default framerate
-		skipSplash: true, // if the default flixel splash screen should be skipped
-		startFullscreen: true // if the game should start at fullscreen mode
+		width: 1280,
+		height: 720,
+		initialState: TitleState,
+		zoom: -1.0,
+		framerate: 60,
+		skipSplash: true,
+		startFullscreen: true
 	};
 
 	public static var fpsVar:FPS;
-
-	// You can pretty much ignore everything from here on - your code should go in your states.
 
 	public static function main():Void
 	{
@@ -69,21 +56,15 @@ class Main extends Sprite
 
     SUtil.gameCrashCheck();
 		if (stage != null)
-		{
 			init();
-		}
 		else
-		{
 			addEventListener(Event.ADDED_TO_STAGE, init);
-		}
 	}
 
 	private function init(?E:Event):Void
 	{
 		if (hasEventListener(Event.ADDED_TO_STAGE))
-		{
 			removeEventListener(Event.ADDED_TO_STAGE, init);
-		}
 
 		setupGame();
 	}
@@ -93,17 +74,18 @@ class Main extends Sprite
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// [PE-iOS] 顶部黑边（对齐无视频版画面）：
-		// 把可用高度扣除一段，再按「可用高度」算缩放与画布高度，
-		// 最后将整个 FlxGame 下移同样像素，顶部就自然露出黑边。
+		// 顶部黑边：扣除一段可用高度，再把整个 FlxGame 下移同样像素
 		var topInset:Int = 0;
 		var viewHeight:Int = stageHeight;
 		if (IOS_TOP_INSET_RATIO > 0)
 		{
 			topInset = Std.int(stageHeight * IOS_TOP_INSET_RATIO);
 			viewHeight = stageHeight - topInset;
-			if (viewHeight < 1) viewHeight = stageHeight;
-			trace('[PE-iOS] 视口对齐无视频版：屏高 ' + stageHeight + ' → 顶部黑边 ' + topInset + '，可用高 ' + viewHeight);
+			if (viewHeight < 1)
+			{
+				topInset = 0;
+				viewHeight = stageHeight;
+			}
 		}
 
 		if (game.zoom == -1.0)
@@ -114,16 +96,44 @@ class Main extends Sprite
 			game.width = Math.ceil(stageWidth / game.zoom);
 			game.height = Math.ceil(viewHeight / game.zoom);
 		}
-	
-			SUtil.doTheCheck();
-	
+
+		// 标记文件：用于确认「当前装的包到底有没有包含本改动」
+		#if ios
+		try
+		{
+			File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt',
+				'stage=' + stageWidth + 'x' + stageHeight
+				+ '\ntopInset=' + topInset
+				+ '\ncanvas=' + game.width + 'x' + game.height
+				+ '\nzoom=' + game.zoom + '\n');
+		}
+		catch (e:Dynamic) {}
+		#end
+
+		trace('[PE-iOS] 视口对齐无视频版：stage=' + stageWidth + 'x' + stageHeight + '，顶部黑边 ' + topInset + '，画布 ' + game.width + 'x' + game.height);
+
+		SUtil.doTheCheck();
+
 		ClientPrefs.loadDefaultKeys();
 
-		// 用变量接收 FlxGame 以便设置 y 偏移（顶部黑边）
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
-		if (topInset > 0)
-			flxGame.y = topInset;
 		addChild(flxGame);
+
+		if (topInset > 0)
+		{
+			flxGame.y = topInset;
+			// 保险：前 15 帧每帧重置一次，防止被其它代码/尺寸变化重置坐标
+			var frames:Int = 0;
+			var applier:Event->Void = null;
+			applier = function(e:Event):Void
+			{
+				flxGame.y = topInset;
+				frames++;
+				if (frames > 15 && Lib.current.stage != null)
+					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
+			};
+			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
+		}
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
 		if (topInset > 0)
@@ -139,7 +149,7 @@ class Main extends Sprite
 		FlxG.autoPause = false;
 		FlxG.mouse.visible = false;
 		#end
-		
+
 		#if CRASH_HANDLER
 		Lib.current.loaderInfo.uncaughtErrorEvents.addEventListener(UncaughtErrorEvent.UNCAUGHT_ERROR, onCrash);
 		#end
@@ -155,7 +165,6 @@ class Main extends Sprite
 	}
 
 	// Code was entirely made by sqirra-rng for their fnf engine named "Izzy Engine", big props to them!!!
-	// very cool person for real they don't get enough credit for their work
 	#if CRASH_HANDLER
 	public static function onCrash(e:UncaughtErrorEvent):Void
 		{
@@ -163,10 +172,10 @@ class Main extends Sprite
 			var dateNow:String = Date.now().toString();
 			dateNow = StringTools.replace(dateNow, " ", "_");
 			dateNow = StringTools.replace(dateNow, ":", "'");
-	
+
 			var path:String = "crash/" + "crash_" + dateNow + ".txt";
 			var errMsg:String = "";
-	
+
 			for (stackItem in callStack)
 			{
 				switch (stackItem)
@@ -177,18 +186,18 @@ class Main extends Sprite
 						Sys.println(stackItem);
 				}
 			}
-	
+
 			errMsg += e.error;
-	
+
 			if (!FileSystem.exists(SUtil.getPath() + "crash"))
 			FileSystem.createDirectory(SUtil.getPath() + "crash");
-	
+
 			File.saveContent(SUtil.getPath() + path, errMsg + "\n");
-	
+
 			Sys.println(errMsg);
 			Sys.println("Crash dump saved in " + Path.normalize(path));
 			Sys.println("Making a simple alert ...");
-	
+
 			FlxG.switchState(new CrashState());
 		}
 	#end
