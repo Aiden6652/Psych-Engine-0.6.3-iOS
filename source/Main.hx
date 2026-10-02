@@ -33,17 +33,12 @@ class Main extends Sprite
 	/**
 	 * [PE-iOS] 目标画面宽高比（对齐「无视频版」）。
 	 *
-	 * 为什么是 16:9：
-	 *   实测「无视频版」在 iPad Pro 11"（2420x1668，宽高比 1.45）上的样子是：
-	 *     画面宽 2220、高约 1249（= 2220 * 9/16），垂直居中，
-	 *     上下各留 (1668-1249)/2 ≈ 209px 黑边，左右各留 100px。
-	 *   也就是说：它本来就是「16:9 的游戏画面在非 16:9 的 iPad 屏幕上自然地上下留黑」，
-	 *   不是「顶部刻意让出一段」。
+	 * iPad Pro 11" 屏幕是 2420x1668（比例 1.45），而游戏画面是 16:9（1.78），
+	 * 所以在竖黑边的意义上，画面必然上下留黑（而非“顶部刻意让出一段”）：
+	 *   画面宽 2220 → 高 1249（=2220*9/16），垂直居中 →
+	 *   上下各留 ≈ 209px、左右各 100px。
 	 *
-	 * 之前用“顶部黑边比例”的做法（把画面拉满高度、只在上方留黑）是错的：
-	 *   会出现左右对上、但底部没有黑边、而且竖向视野偏大（角色显得小）的现象。
-	 *
-	 * 想恢复“铺满屏幕”：把本常量改为 0 即可（不做任何处理）。
+	 * 想恢复“铺满屏幕”：把本常量改为 0 即可。
 	 */
 	static inline var IOS_TARGET_ASPECT:Float = 16.0 / 9.0;
 
@@ -88,20 +83,19 @@ class Main extends Sprite
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// [PE-iOS] 视口：按目标宽高比（16:9）算出可用高度，并在 stage 内垂直居中。
-		// stage 会被引擎整体缩放到屏幕：
-		//   stage 1024x768 → 屏幕 2224x1668（缩放 2.172），
-		//   所以 stage 内 96px 的上下留白，到屏幕上就是约 208px。
+		// [PE-iOS] 只决定「画布多大（即缩放倍数）」，居中交给 HaxeFlixel 自己处理。
+		//
+		// 踩坑记录：之前在这里额外做了 `flxGame.y = 偏移量`，想自己把画面推到中间，
+		// 但 FlxGame 内部本来就会按缩放比例把自己居中 → 双重偏移 →
+		// 画面被推下去、底部被裁掉，表现为「打歌时像放大了一样」、
+		// hitbox 底部的颜色条看着“跑到中间”、大特效盖不住全屏。
+		// 所以本版起：不碰 flxGame.x / flxGame.y，只算尺寸。
 		var viewHeight:Int = stageHeight;
-		var yOffset:Int = 0;
 		if (IOS_TARGET_ASPECT > 0)
 		{
 			var targetH:Int = Std.int(stageWidth / IOS_TARGET_ASPECT);
 			if (targetH > 0 && targetH < stageHeight)
-			{
 				viewHeight = targetH;
-				yOffset = Std.int((stageHeight - viewHeight) / 2);
-			}
 		}
 
 		if (game.zoom == -1.0)
@@ -115,10 +109,9 @@ class Main extends Sprite
 
 		var info:String = 'stage=' + stageWidth + 'x' + stageHeight
 			+ '\nviewHeight=' + viewHeight
-			+ '\nyOffset=' + yOffset
 			+ '\ncanvas=' + game.width + 'x' + game.height
 			+ '\nzoom=' + game.zoom + '\n';
-		trace('[PE-iOS] 视口(16:9 居中)：' + info.replace('\n', ' '));
+		trace('[PE-iOS] 视口(16:9)：' + info.replace('\n', ' '));
 
 		SUtil.doTheCheck();
 
@@ -127,16 +120,13 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// ==================== [PE-iOS] 垂直居中 + 诊断 ====================
-		// 把 FlxGame 下移 yOffset（即上下各留一段黑边），前 600 帧内反复纠正，
-		// 并在第 5 / 30 / 120 / 300 帧把真实数值写进 pe_ios_viewport.txt。
-		if (yOffset > 0)
+		// 诊断：在第 5 / 30 / 120 / 300 帧记录真实数值（含 FlxGame 自己的 x/y/scale）。
+		// 下次有任何“黑边不对/被裁”的问题，看这个文件即可，不用猜。
 		{
 			var frames:Int = 0;
 			var applier:Event->Void = null;
 			applier = function(e:Event):Void
 			{
-				flxGame.y = yOffset;
 				frames++;
 
 				if (frames == 5 || frames == 30 || frames == 120 || frames == 300)
@@ -155,15 +145,13 @@ class Main extends Sprite
 					catch (err:Dynamic) {}
 				}
 
-				if (frames > 600 && Lib.current.stage != null)
+				if (frames > 300 && Lib.current.stage != null)
 					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
 			};
 			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
 		}
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
-		if (yOffset > 0)
-			fpsVar.y = yOffset + 3;
 		addChild(fpsVar);
 		Lib.current.stage.align = "tl";
 		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
