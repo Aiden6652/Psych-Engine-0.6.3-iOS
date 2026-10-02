@@ -12,8 +12,7 @@ jobs:
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
       # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
-      # 配合下面的 actions/cache 后，只改几个 .hx 时绝大部分 .o 直接命中，
-      # 编译时间可以从 ~48 分钟降到几分钟。
+      # 配合下面的 actions/cache 后，只改几个 .hx 时绝大部分 .o 直接命中。
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
@@ -39,7 +38,6 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/pack
           mkdir -p /tmp/pack/assets
-          # 解压后必须是 <Documents>/assets/<...>，不能多一层 preload
           cp -R assets/preload/. /tmp/pack/assets/
           if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
           cp -R example_mods /tmp/pack/mods
@@ -54,7 +52,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v12
+          key: psych063-haxelib-v13
           restore-keys: |
             psych063-haxelib-
 
@@ -62,8 +60,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .hxcpp-cache
-          # key 里带上工具链版本：haxe / hxcpp 一变就自动重建缓存，避免脏缓存
-          key: hxcpp-cache-haxe424-hxcppfork-v1
+          key: hxcpp-cache-haxe424-v1
           restore-keys: |
             hxcpp-cache-haxe424-
 
@@ -82,7 +79,7 @@ jobs:
           mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
           mkdir -p "$HXCPP_COMPILE_CACHE"
-          echo "### 编译缓存现有体积（命中则很大）"
+          echo "### 编译缓存现有体积"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
       - name: 安装依赖
@@ -96,15 +93,17 @@ jobs:
           haxelib install hscript 2.4.0 --always
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
-          # hxvlc 版本选择（很关键）：
-          #   - >= 1.8.0：含 2024-06-30 PR #57 「android/ios libs include visual module」的 iOS 库；
-          #   - <= 1.9.x：未使用 Haxe 4.3 的 `?.` 安全导航语法（2.3.1 用了，Haxe 4.2.4 直接语法报错）；
-          #   - 本仓库 Haxe 固定 4.2.4（升级会连带 hxcpp/iOS 工具链风险，暂不动）。
-          #   1.9.5 同时满足以上两条，且包含 Apple 平台的渲染/字幕修复。
-          echo "## hxvlc 1.9.5"
+          # hxvlc 版本选择（反复踩坑后的结论）：
+          #   * 1.7 / 1.8.x：FlxVideoSprite 没有 `bitmap.forceRendering = true`，
+          #     也不带 1.9.x 的 GPU 纹理渲染路径 → 表现为「能播出声音但画面出不来」；
+          #   * 1.9.4 / 1.9.5 / 2.x：代码里用了 `bitmap?.xxx`（Haxe 4.3 安全导航语法），
+          #     本仓库 Haxe 固定 4.2.4 → 直接语法报错「Unexpected .」；
+          #   * 1.9.3（2024-10-22）：既有 forceRendering，又是 `if (bitmap != null)` 写法，
+          #     且 iOS 库在 2024-06-30 PR #57（include visual module）之后 → 正好可用。
+          echo "## hxvlc 1.9.3"
           rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 1.9.5 --always || { echo "### hxvlc 安装失败"; exit 1; }
-          haxelib set hxvlc 1.9.5
+          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
@@ -114,13 +113,19 @@ jobs:
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
           haxelib list
 
-      - name: 自检 hxvlc
+      - name: 自检 hxvlc（版本 + 关键字段 + iOS 静态库）
         run: |
           set +e
           haxelib path hxvlc
-          grep -m1 '"version"' "$HAXELIB_ROOT/hxvlc/"*/haxelib.json 2>/dev/null || true
-          echo "### iOS 静态库（体积能看出模块多少）###"
-          find "$HAXELIB_ROOT" -path "*hxvlc*" -name "*.a" -exec ls -lh {} \; 2>/dev/null | head
+          HV=$(ls -d "$HAXELIB_ROOT/hxvlc/"* 2>/dev/null | head -1)
+          echo "hxvlc 目录: $HV"
+          grep -m1 'version' "$HV/haxelib.json"
+          echo "### forceRendering 是否存在于 openfl/Video.hx"
+          grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
+          echo "### FlxVideoSprite 是否使用 Haxe4.3 的 ?. 语法（应为空）"
+          grep -n '\?\.[a-zA-Z]' "$HV/source/hxvlc/flixel/FlxVideoSprite.hx" || echo "（无，OK）"
+          echo "### iOS 静态库体积"
+          find "$HV" -name "*.a" -exec ls -lh {} \; | head
 
       - name: 初始化 lime
         run: |
@@ -151,9 +156,8 @@ jobs:
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
 
-          echo "### 编排日志里 hxcpp 缓存命中情况（'Compiling' 行越多 = 命中越少）###"
+          echo "### 日志里 Compiling 行数（越少说明编译缓存命中越多）"
           grep -c "Compiling" build.log || true
-
           echo "### 编译日志末尾 60 行 ###"
           tail -60 build.log
           echo "### Haxe 报错行（.hx:行号）###"
@@ -173,7 +177,7 @@ jobs:
             exit 1
           fi
           echo "产物: $APP"
-          echo "### 缓存体积（构建后）###"
+          echo "### 缓存体积（构建后）"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
           exit $RC
 
