@@ -97,20 +97,7 @@ class Main extends Sprite
 			game.height = Math.ceil(viewHeight / game.zoom);
 		}
 
-		// 标记文件：用于确认「当前装的包到底有没有包含本改动」
-		#if ios
-		try
-		{
-			File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt',
-				'stage=' + stageWidth + 'x' + stageHeight
-				+ '\ntopInset=' + topInset
-				+ '\ncanvas=' + game.width + 'x' + game.height
-				+ '\nzoom=' + game.zoom + '\n');
-		}
-		catch (e:Dynamic) {}
-		#end
-
-		trace('[PE-iOS] 视口对齐无视频版：stage=' + stageWidth + 'x' + stageHeight + '，顶部黑边 ' + topInset + '，画布 ' + game.width + 'x' + game.height);
+		trace('[PE-iOS] 视口：stage=' + stageWidth + 'x' + stageHeight + '，顶部黑边 ' + topInset + '，画布 ' + game.width + 'x' + game.height);
 
 		SUtil.doTheCheck();
 
@@ -119,17 +106,39 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
+		// ==================== [PE-iOS] 顶部黑边 + 运行期诊断 ====================
+		// 上一版只在头 15 帧里纠正 flxGame.y，实测仍有偏差（下面会露出黑边），
+		// 所以这次：① 一直纠正（直到 600 帧）；② 在几个时间点把真实数值写进 pe_ios_viewport.txt，
+		// 包括 stage 尺寸、FlxG 尺寸、摄像机尺寸、FlxGame 的 x/y/scale —— 一眼就能看出是谁改的。
 		if (topInset > 0)
 		{
-			flxGame.y = topInset;
-			// 保险：前 15 帧每帧重置一次，防止被其它代码/尺寸变化重置坐标
 			var frames:Int = 0;
 			var applier:Event->Void = null;
 			applier = function(e:Event):Void
 			{
 				flxGame.y = topInset;
 				frames++;
-				if (frames > 15 && Lib.current.stage != null)
+
+				// 5 / 30 / 120 / 300 帧时各记一次快照
+				if (frames == 5 || frames == 30 || frames == 120 || frames == 300)
+				{
+					try
+					{
+						var out:String = 'frame=' + frames + '\n'
+							+ 'stage=' + Lib.current.stage.stageWidth + 'x' + Lib.current.stage.stageHeight + '\n'
+							+ 'topInset=' + topInset + '\n'
+							+ 'gameBox=' + game.width + 'x' + game.height + '\n'
+							+ 'FlxG=' + FlxG.width + 'x' + FlxG.height + '\n'
+							+ 'cam0=' + (FlxG.camera != null ? (FlxG.camera.width + 'x' + FlxG.camera.height) : 'null') + '\n'
+							+ 'game.x=' + flxGame.x + ' game.y=' + flxGame.y + '\n'
+							+ 'game.scale=' + flxGame.scaleX + ',' + flxGame.scaleY + '\n'
+							+ 'game.size=' + flxGame.width + 'x' + flxGame.height + '\n';
+						File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt', out);
+					}
+					catch (err:Dynamic) {}
+				}
+
+				if (frames > 600 && Lib.current.stage != null)
 					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
 			};
 			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
