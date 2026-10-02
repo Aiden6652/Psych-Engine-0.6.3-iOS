@@ -6,6 +6,7 @@ import flixel.FlxSubState;
 import flixel.util.FlxTimer;
 import hxvlc.flixel.FlxVideoSprite;
 import sys.FileSystem;
+import sys.io.File;
 
 /**
  * [PE-iOS] hxCodec 兼容层 —— 用 hxvlc 实现真正的视频播放。
@@ -17,17 +18,15 @@ import sys.FileSystem;
  *   - hxvlc 自带 libvlc 的 iOS 静态库（libvlc_device.a），所以 iOS 上让它干活，
  *     再补一个同名的 VideoHandler，让老模组一行代码都不用改。
  *
- * ⚠ hxvlc 版本要求：**必须 ≥ 1.9.3**（更推荐 2.x）。
- *   原因：hxvlc 在 2024-06-30 的 PR #57（"Update android and ios libs to include visual module"）
- *   之前，iOS/Android 的 libvlc 静态库里**没有 visual 模块**——
- *   后果就是「能播出声音、但画面出不来」（黑屏），因为音频走 audio 模块、
- *   视频输出依赖 visual 模块。当初 CI 用的 1.8.1 正好在修复之前，踩的就是这个坑。
+ * ⚠ hxvlc 版本要求：**1.9.3**
+ *   原因一：1.7/1.8.x 的 FlxVideoSprite 没有 `bitmap.forceRendering = true`，
+ *   也不带 1.9.x 的 GPU 纹理渲染路径 → 表现为「能播出声音、但画面出不来」。
+ *   原因二：1.9.4+ / 2.x 用了 `bitmap?.xxx`（Haxe 4.3 安全导航语法），
+ *   本仓库 Haxe 固定 4.2.4，会直接语法报错。
  *
- * 模组里常见写法都能继续用：
- *   var video:MP4Handler = new MP4Handler();
- *   video.finishCallback = function() { ... };
- *   video.playVideo(Paths.video('cutscene'));   // 也可以是相对游戏目录的路径
- *   PlayState.instance.openSubState(video);
+ * 🩺 诊断：播视频全过程会追加写入 <游戏目录>/pe_ios_video.txt，
+ *   含路径、文件是否存在、load 返回值、onFormatSetup 是否触发、bitmapData 尺寸等。
+ *   再出现「有声音无画面」时，直接看这个文件即可定位。
  */
 class VideoHandler extends FlxSubState
 {
@@ -54,12 +53,31 @@ class VideoHandler extends FlxSubState
 		super();
 	}
 
+	// ==================== 🩺 诊断写盘 ====================
+	// 追加一行到 <游戏目录>/pe_ios_video.txt（只保留最近 60 行，避免无限增长）。
+	static function diag(line:String):Void
+	{
+		try
+		{
+			var p:String = SUtil.getPath() + 'pe_ios_video.txt';
+			var old:String = '';
+			if (FileSystem.exists(p))
+			{
+				try { old = File.getContent(p); } catch (e:Dynamic) { old = ''; }
+				var lines:Array<String> = old.split('\n');
+				if (lines.length > 60) old = lines.slice(lines.length - 60, lines.length).join('\n') + '\n';
+			}
+			File.saveContent(p, old + line + '\n');
+		}
+		catch (e:Dynamic) {}
+	}
+
 	/** 播放一个视频。path 可以是绝对路径，也可以是相对游戏目录的路径。 */
 	public function playVideo(path:String, ?shouldLoop:Bool = false, ?canSkipIt:Bool = true):Void
 	{
 		if (path == null || path.length < 1)
 		{
-			trace('[PE-iOS] playVideo 收到空路径，直接跳过视频');
+			diag('[playVideo] 收到空路径，直接跳过');
 			onVideoFinished();
 			return;
 		}
@@ -67,10 +85,11 @@ class VideoHandler extends FlxSubState
 		loop = shouldLoop;
 		canSkip = canSkipIt;
 		videoPath = resolvePath(path);
-		trace('[PE-iOS] 开始播放视频: ' + videoPath);
+		var fileExists:Bool = FileSystem.exists(videoPath);
+		diag('[playVideo] 请求=' + path + ' 解析后=' + videoPath + ' 存在=' + fileExists);
 
-		if (!FileSystem.exists(videoPath))
-			trace('[PE-iOS] 警告：这个路径在文件系统里不存在，视频可能播不出来');
+		if (!fileExists)
+			diag('[playVideo] 警告：文件不存在，libvlc 会加载失败');
 
 		// 注意：这里刻意不传 (0, 0)。hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
 		// 传 (0, 0) 会被当成「instance=0, x=0」，类型不匹配直接编译失败；
@@ -78,24 +97,46 @@ class VideoHandler extends FlxSubState
 		video = new FlxVideoSprite();
 		video.antialiasing = false;
 		add(video);
+		diag('[create] FlxVideoSprite 已创建，bitmap=' + (video.bitmap == null ? 'null' : 'ok'));
 
 		if (video.bitmap != null)
 		{
 			// 视频尺寸就绪后铺满屏幕（保持长宽比，多余的裁掉）
 			video.bitmap.onFormatSetup.add(function():Void
 			{
-				if (video == null || video.bitmap == null) return;
+				if (video == null || video.bitmap == null)
+				{
+					diag('[formatSetup] 警告：video 或 bitmap 已为 null，放弃缩放');
+					return;
+				}
 				var bmd = video.bitmap.bitmapData;
-				if (bmd == null) return;
+				if (bmd == null)
+				{
+					diag('[formatSetup] 警告：bitmapData 为 null（视频帧没准备好）→ 画面会是空白');
+					return;
+				}
+
+				diag('[formatSetup] bitmapData=' + bmd.width + 'x' + bmd.height);
+
+				// 防御：尺寸异常（0 / NaN）时不要算缩放，
+				// 否则会得到 NaN → Std.int(NaN)=0 → setGraphicSize(0,0)
+				// → 精灵完全不可见（正好就是「有声音无画面」的样子）。
+				if (bmd.width < 2 || bmd.height < 2)
+				{
+					diag('[formatSetup] 警告：尺寸过小，跳过缩放，按原尺寸显示');
+					video.updateHitbox();
+					video.screenCenter();
+					return;
+				}
+
 				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
-				if (scale <= 0) scale = 1;
-				// setGraphicSize(?Width:Int, ?Height:Int) 的参数是 Int，
-				// 而 bmd.width * scale 是 Float —— Haxe 不会隐式取整，
-				// 直接传会报「Float should be Int」，所以必须 Std.int()。
-				// 同时保证至少 1 像素，避免算出 0 导致缩放无效。
-				video.setGraphicSize(Std.int(Math.max(1, bmd.width * scale)), Std.int(Math.max(1, bmd.height * scale)));
+				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检（NaN != NaN）
+				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
+				var th:Int = Std.int(Math.max(1, bmd.height * scale));
+				video.setGraphicSize(tw, th);
 				video.updateHitbox();
 				video.screenCenter();
+				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x);
 			});
 			video.bitmap.onEndReached.add(onVideoFinished);
 		}
@@ -110,13 +151,24 @@ class VideoHandler extends FlxSubState
 		}
 		catch (e:Dynamic)
 		{
-			trace('[PE-iOS] 视频加载异常: ' + e);
+			diag('[load] 抛异常: ' + e);
 			loaded = false;
+		}
+		diag('[load] 返回值=' + loaded);
+
+		if (!loaded)
+		{
+			// 回退：某些模组把视频放在游戏目录的 assets/videos 下
+			var fileName:String = videoPath.split('/').pop();
+			var retryPath:String = SUtil.getPath() + 'assets/videos/' + fileName;
+			diag('[load] 首次失败，改用资源路径重试: ' + retryPath);
+			try { loaded = video.load(retryPath, options); } catch (e:Dynamic) { loaded = false; }
+			diag('[load] 重试返回值=' + loaded);
 		}
 
 		if (!loaded)
 		{
-			trace('[PE-iOS] 视频加载失败: ' + videoPath);
+			diag('[load] 两次都失败，跳过该视频');
 			onVideoFinished();
 			return;
 		}
@@ -129,7 +181,8 @@ class VideoHandler extends FlxSubState
 		{
 			if (video != null && playing)
 			{
-				try { video.play(); } catch (e:Dynamic) { trace('[PE-iOS] play 异常: ' + e); }
+				try { video.play(); } catch (e:Dynamic) { diag('[play] 异常: ' + e); }
+				diag('[play] 已调用 play()');
 			}
 		});
 
@@ -149,6 +202,7 @@ class VideoHandler extends FlxSubState
 		if (ended) return;
 		ended = true;
 		playing = false;
+		diag('[finish] 视频结束/被跳过');
 
 		if (video != null)
 		{
@@ -159,7 +213,7 @@ class VideoHandler extends FlxSubState
 			}
 			catch (e:Dynamic)
 			{
-				trace('[PE-iOS] 释放视频对象出错（已忽略）: ' + e);
+				diag('[finish] 释放视频对象出错（已忽略）: ' + e);
 			}
 			video = null;
 		}
@@ -201,6 +255,10 @@ class VideoHandler extends FlxSubState
 
 		var candidate:String = SUtil.getPath() + path;
 		if (FileSystem.exists(candidate)) return candidate;
+
+		// 再试：相对游戏目录的 assets/videos/
+		var inAssets:String = SUtil.getPath() + 'assets/videos/' + path;
+		if (FileSystem.exists(inAssets)) return inAssets;
 
 		return path;
 	}
