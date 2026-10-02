@@ -430,10 +430,15 @@ class TitleState extends MusicBeatState
 	}
 
 	// ==================== [PE-iOS] 开机片头 ====================
-	// 读模组里的 images/vfx_frames/intro/0001.png …（intro.mp4 的逐帧图）并播 sounds/vfx/intro.ogg。
-	// 注意：这里**不能**用 Paths.image() —— 它内部 persist = true 会把每张图永久留在缓存里，
-	// 2344 帧 1280x720 会吃满内存直接崩。所以自己读文件、自己销毁上一张（同一时刻只留 1~2 张）。
-	// 没装模组（帧文件不存在）时什么都不做，原版流程不受影响。
+	// 两种模式，优先真视频：
+	//   A) 真视频：mods/<模组>/videos/intro.mp4 或 <游戏目录>/assets/videos/intro.mp4
+	//      → 用 hxvlc 直接播（画面与声音都来自 mp4，铺满屏幕、保持比例裁切）。
+	//      ⚠ 画面能不能出来取决于 hxvlc 版本：必须 >= 1.9.3（我们用的是 2.3.1）。
+	//        1.8.x 的 iOS 静态库缺 visual 模块，会「有声音、没画面」。
+	//   B) 逐帧图：images/vfx_frames/intro/0001.png …（intro.mp4 切出来的帧）+ sounds/vfx/intro.ogg
+	//      注意：这里**不能**用 Paths.image() —— 它内部 persist = true 会把每张图永久留在缓存里，
+	//      2344 帧 1280x720 会吃满内存直接崩。所以自己读文件、自己销毁上一张（同一时刻只留 1~2 张）。
+	// 两者都没有时什么都不做，原版流程不受影响。
 	static inline var INTRO_FRAMES:Int = 2344;
 	static inline var INTRO_FPS:Float = 24;
 	static inline var INTRO_W:Int = 1280;
@@ -444,6 +449,11 @@ class TitleState extends MusicBeatState
 	var introPlaying:Bool = false;
 	var introTime:Float = 0;
 	var introFrame:Int = 0;
+	#if VIDEOS_ALLOWED
+	var introVideo:hxvlc.flixel.FlxVideoSprite = null;
+	#end
+	/// 本次片头是不是「真视频」模式（否则走逐帧图）
+	var introUsingVideo:Bool = false;
 
 	inline function introPath(n:Int):String
 	{
@@ -453,6 +463,16 @@ class TitleState extends MusicBeatState
 	function startIntroVideo():Void
 	{
 		#if MODS_ALLOWED
+		#if VIDEOS_ALLOWED
+		var vidPath:String = Paths.video('intro');
+		if (vidPath != null && FileSystem.exists(vidPath))
+		{
+			startIntroRealVideo(vidPath);
+			return;
+		}
+		#end
+
+		// 兜底：逐帧图
 		if (!FileSystem.exists(introPath(1))) return; // 没装模组 / 没有片头帧 → 完全跳过
 		introSpr = new FlxSprite(0, 0);
 		introSpr.antialiasing = false;
@@ -460,11 +480,78 @@ class TitleState extends MusicBeatState
 		introFrame = 0;
 		introTime = 0;
 		introPlaying = true;
+		introUsingVideo = false;
 		setIntroFrame(1);
 		if (FileSystem.exists(Paths.modsSounds('vfx', 'intro')))
 		{
 			introSound = FlxG.sound.play(Paths.sound('vfx/intro'), 1);
 		}
+		#end
+	}
+
+	/// [PE-iOS] 片头真视频：铺满屏幕（保持长宽比裁切），播完自动收尾，点一下可跳过。
+	/// 加载失败时自动回落到逐帧图，不会卡在黑屏。
+	function startIntroRealVideo(path:String):Void
+	{
+		#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+		// 注意：不要传 (0, 0) —— hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
+		// 传 (0, 0) 会被当成 instance=0 而编译失败；不传参数在 1.x / 2.x 下都合法。
+		var vs:hxvlc.flixel.FlxVideoSprite = new hxvlc.flixel.FlxVideoSprite();
+		vs.antialiasing = false;
+		add(vs);
+
+		if (vs.bitmap != null)
+		{
+			vs.bitmap.onFormatSetup.add(function():Void
+			{
+				if (vs.bitmap == null) return;
+				var bmd = vs.bitmap.bitmapData;
+				if (bmd == null) return;
+				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
+				if (scale <= 0) scale = 1;
+				vs.setGraphicSize(Std.int(Math.max(1, bmd.width * scale)), Std.int(Math.max(1, bmd.height * scale)));
+				vs.updateHitbox();
+				vs.screenCenter();
+			});
+			vs.bitmap.onEndReached.add(endIntroVideo);
+		}
+
+		var loaded:Bool = false;
+		try { loaded = vs.load(path); } catch (e:Dynamic) { loaded = false; }
+
+		if (!loaded)
+		{
+			trace('[PE-iOS] 片头视频加载失败，改用逐帧图: ' + path);
+			try { vs.destroy(); } catch (e:Dynamic) {}
+			// 回落逐帧图
+			if (FileSystem.exists(introPath(1)))
+			{
+				introSpr = new FlxSprite(0, 0);
+				introSpr.antialiasing = false;
+				add(introSpr);
+				introFrame = 0;
+				introTime = 0;
+				introPlaying = true;
+				introUsingVideo = false;
+				setIntroFrame(1);
+				if (FileSystem.exists(Paths.modsSounds('vfx', 'intro')))
+					introSound = FlxG.sound.play(Paths.sound('vfx/intro'), 1);
+			}
+			return;
+		}
+
+		trace('[PE-iOS] 片头视频开始播放: ' + path);
+		introVideo = vs;
+		introUsingVideo = true;
+		introPlaying = true;
+		introTime = 0;
+		new FlxTimer().start(0.001, function(_:FlxTimer)
+		{
+			if (introPlaying && introVideo != null)
+			{
+				try { introVideo.play(); } catch (e:Dynamic) {}
+			}
+		});
 		#end
 	}
 
@@ -492,9 +579,17 @@ class TitleState extends MusicBeatState
 	{
 		if (!introPlaying) return;
 		introPlaying = false;
+		introUsingVideo = false;
 		if (introSound != null) { introSound.stop(); introSound = null; }
 		if (introSpr != null) { remove(introSpr, true); introSpr = null; }
 		if (introGfx != null) { introGfx.destroy(); introGfx = null; }
+		#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+		if (introVideo != null)
+		{
+			try { remove(introVideo, true); introVideo.destroy(); } catch (e:Dynamic) {}
+			introVideo = null;
+		}
+		#end
 		// 记一下：片头播过了（模组里的 lua 会读这个标记，避免在 story 第一首又播一遍）
 		#if MODS_ALLOWED
 		try { File.saveContent(SUtil.getPath() + Paths.getPreloadPath('intro_seen.txt'), '1'); } catch (e:Dynamic) {}
@@ -526,24 +621,36 @@ class TitleState extends MusicBeatState
 		if (FlxG.sound.music != null)
 			Conductor.songPosition = FlxG.sound.music.time;
 
-		// [PE-iOS] 开机片头播放期间：切帧、按键跳过，并屏蔽标题页原有输入
+		// [PE-iOS] 开机片头播放期间：切帧/等视频结束、按键跳过，并屏蔽标题页原有输入
 		if (introPlaying)
 		{
 			introTime += elapsed;
 			if (FlxG.sound.music != null) FlxG.sound.music.stop(); // 别和片头的声音打架
-			var want:Int = Std.int(introTime * INTRO_FPS) + 1;
-			if (want > introFrame)
+
+			if (introUsingVideo)
 			{
-				if (want > INTRO_FRAMES)
+				// 真视频：画面与声音都由 hxvlc 负责，播完走 onEndReached → endIntroVideo。
+				// 这里只处理「点一下跳过」（开场 0.6 秒内不响应，避免误触）。
+				if (introTime > 0.6 && introSkippedByInput())
 					endIntroVideo();
-				else
-				{
-					introFrame = want;
-					setIntroFrame(introFrame);
-				}
 			}
-			if (introPlaying && introTime > 0.6 && introSkippedByInput())
-				endIntroVideo();
+			else
+			{
+				var want:Int = Std.int(introTime * INTRO_FPS) + 1;
+				if (want > introFrame)
+				{
+					if (want > INTRO_FRAMES)
+						endIntroVideo();
+					else
+					{
+						introFrame = want;
+						setIntroFrame(introFrame);
+					}
+				}
+				if (introPlaying && introTime > 0.6 && introSkippedByInput())
+					endIntroVideo();
+			}
+
 			super.update(elapsed);
 			return;
 		}
