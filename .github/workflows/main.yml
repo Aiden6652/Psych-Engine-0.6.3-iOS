@@ -15,21 +15,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 恢复仓库自带 assets / mods（不要用 FunkinCrew 覆盖，歌单不匹配会黑屏）
+      # 注意：example_mods 目录必须保留原名！
+      # Project.xml 里写着 <assets path='example_mods' rename='mods'/>，
+      # 改名会让 lime 直接报 "Could not find asset path example_mods" 然后退出。
+      - name: 恢复仓库自带 assets / example_mods
         run: |
           set -Eeuo pipefail
-          rm -rf assets mods assets.zip resources.zip
+          rm -rf assets resources.zip assets/preload/resources.zip mods
           git checkout -f HEAD -- assets
           git checkout -f HEAD -- example_mods
-          mv example_mods mods
           echo "assets 文件数: $(find assets -type f | wc -l)"
-          echo "mods 文件数: $(find mods -type f | wc -l)"
+          echo "example_mods 文件数: $(find example_mods -type f | wc -l)"
 
-      - name: 打包内置资源 resources.zip（首次启动自动释放，免手动解压）
+      - name: 打包内置资源 resources.zip（zip 里 mods 用重命名后的副本）
         run: |
           set -Eeuo pipefail
-          echo "PE iOS: mods folder" > mods/readme.txt
-          zip -qry /tmp/resources.zip assets mods
+          rm -rf /tmp/pack
+          mkdir -p /tmp/pack
+          # 先复制再打（顺序很重要：先拷贝，避免把正在生成的 zip 自己也包进去）
+          cp -R assets /tmp/pack/assets
+          cp -R example_mods /tmp/pack/mods
+          echo "PE iOS: mods folder" > /tmp/pack/mods/readme.txt
+          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets mods )
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
@@ -98,18 +105,10 @@ jobs:
       - name: 自检：hxvlc 的 iOS 静态库
         run: |
           set +e
-          echo "### 找 libvlc_device.a"
-          find "$HAXELIB_ROOT/hxvlc" -name "*.a" -maxdepth 5 2>/dev/null | head -10
           FOUND=$(find "$HAXELIB_ROOT/hxvlc" -name "libvlc_device.a" 2>/dev/null | head -1)
-          if [ -n "$FOUND" ]; then
-            echo "OK: $FOUND"
-            ls -lh "$FOUND"
-          else
-            echo "!! 没找到 libvlc_device.a，iOS 链接会失败（但也继续跑，看真实报错）"
-            ls -R "$HAXELIB_ROOT/hxvlc" 2>/dev/null | head -40
-          fi
+          if [ -n "$FOUND" ]; then echo "OK: $FOUND"; ls -lh "$FOUND"; else echo "!! 没找到 libvlc_device.a"; fi
           echo "### hxCodec 确认不存在（不该被安装）"
-          ls -d "$HAXELIB_ROOT/hxCodec" 2>/dev/null && echo "!! hxCodec 被装上了，它在 iOS 上会去链不存在的 libvlc.a" || echo "OK: 没有 hxCodec"
+          ls -d "$HAXELIB_ROOT/hxCodec" 2>/dev/null && echo "!! hxCodec 被装上了" || echo "OK: 没有 hxCodec"
 
       - name: 自检：内置资源包
         run: |
@@ -187,7 +186,7 @@ jobs:
           fi
           ls -lh "$APP/assets/resources.zip"
 
-          # 视频 mp4 已在 resources.zip 里（首次启动释放到 Documents），IPA 内不重复塞一份
+          # 视频 mp4 已在 resources.zip 里（首次启动释放到 Documents），IPA 内不重复塞
           find "$APP" -name "*.mp4" -delete || true
 
           rm -rf Payload *.ipa
