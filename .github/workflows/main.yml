@@ -11,6 +11,10 @@ jobs:
     timeout-minutes: 300
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
+      # 配合下面的 actions/cache 后，只改几个 .hx 时绝大部分 .o 直接命中，
+      # 编译时间可以从 ~48 分钟降到几分钟。
+      HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +32,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/patch_lua_guard.py
-          echo "### 加固后的行数统计"
           grep -c "LuaGuard" source/FunkinLua.hx || true
 
       - name: 打包内置资源 resources.zip（按游戏目录结构：assets/… 与 mods/…）
@@ -36,6 +39,7 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/pack
           mkdir -p /tmp/pack/assets
+          # 解压后必须是 <Documents>/assets/<...>，不能多一层 preload
           cp -R assets/preload/. /tmp/pack/assets/
           if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
           cp -R example_mods /tmp/pack/mods
@@ -44,16 +48,24 @@ jobs:
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
-          echo "### zip 内容抽样（确认没有 preload 这一层）###"
-          unzip -l assets/preload/resources.zip | head -15
+          unzip -l assets/preload/resources.zip | head -10
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v11
+          key: psych063-haxelib-v12
           restore-keys: |
             psych063-haxelib-
+
+      - name: 缓存 hxcpp 编译产物（提速关键）
+        uses: actions/cache@v4
+        with:
+          path: .hxcpp-cache
+          # key 里带上工具链版本：haxe / hxcpp 一变就自动重建缓存，避免脏缓存
+          key: hxcpp-cache-haxe424-hxcppfork-v1
+          restore-keys: |
+            hxcpp-cache-haxe424-
 
       - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
@@ -63,13 +75,15 @@ jobs:
           if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
           sudo installer -pkg haxe.pkg -target /
           haxe -version
-          haxelib version
 
       - name: 配置 haxelib
         run: |
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
+          mkdir -p "$HXCPP_COMPILE_CACHE"
+          echo "### 编译缓存现有体积（命中则很大）"
+          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
       - name: 安装依赖
         run: |
@@ -82,15 +96,15 @@ jobs:
           haxelib install hscript 2.4.0 --always
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
-          # hxvlc 必须 >= 1.9.3（推荐 2.x）：
-          # 2024-06-30 的 PR #57（"Update android and ios libs to include visual module"）
-          # 之前，iOS/Android 的 libvlc 静态库不含 visual 模块，
-          # 症状就是「能播出声音、但画面出不来」（黑屏）。
-          # 原先用的 1.8.1 正好在修复之前，所以踩了这个坑。
-          echo "## hxvlc 2.3.1（含 iOS visual 模块）"
+          # hxvlc 版本选择（很关键）：
+          #   - >= 1.8.0：含 2024-06-30 PR #57 「android/ios libs include visual module」的 iOS 库；
+          #   - <= 1.9.x：未使用 Haxe 4.3 的 `?.` 安全导航语法（2.3.1 用了，Haxe 4.2.4 直接语法报错）；
+          #   - 本仓库 Haxe 固定 4.2.4（升级会连带 hxcpp/iOS 工具链风险，暂不动）。
+          #   1.9.5 同时满足以上两条，且包含 Apple 平台的渲染/字幕修复。
+          echo "## hxvlc 1.9.5"
           rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 2.3.1 --always || { echo "### hxvlc 安装失败"; exit 1; }
-          haxelib set hxvlc 2.3.1
+          haxelib install hxvlc 1.9.5 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 1.9.5
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
@@ -104,7 +118,8 @@ jobs:
         run: |
           set +e
           haxelib path hxvlc
-          echo "### iOS 静态库（新版应明显更大）###"
+          grep -m1 '"version"' "$HAXELIB_ROOT/hxvlc/"*/haxelib.json 2>/dev/null || true
+          echo "### iOS 静态库（体积能看出模块多少）###"
           find "$HAXELIB_ROOT" -path "*hxvlc*" -name "*.a" -exec ls -lh {} \; 2>/dev/null | head
 
       - name: 初始化 lime
@@ -130,26 +145,36 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          START=$(date +%s)
           haxelib run lime build ios -release -nosign > build.log 2>&1
           RC=$?
-          echo "lime build RC=$RC  log=$(wc -c < build.log) bytes"
+          END=$(date +%s)
+          echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
+
+          echo "### 编排日志里 hxcpp 缓存命中情况（'Compiling' 行越多 = 命中越少）###"
+          grep -c "Compiling" build.log || true
+
           echo "### 编译日志末尾 60 行 ###"
           tail -60 build.log
           echo "### Haxe 报错行（.hx:行号）###"
           grep -nE '\.hx:[0-9]+' build.log | tail -40
           echo "### 链接报错行 ###"
           grep -nE '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: ' build.log | tail -20
+
           ERR="$(grep -E '\.hx:[0-9]+' build.log | tail -40)"
           if [ -z "$ERR" ]; then ERR="$(tail -25 build.log)"; fi
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
+
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then
             echo "### 没有 .app 产物 ###"
             exit 1
           fi
           echo "产物: $APP"
+          echo "### 缓存体积（构建后）###"
+          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
           exit $RC
 
       - name: 上传构建日志
@@ -171,7 +196,6 @@ jobs:
           du -sh "$APP"
           if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
           if [ ! -f "$APP/assets/resources.zip" ]; then
-            echo "lime 没带 resources.zip，手动补进 App 包"
             cp -f assets/preload/resources.zip "$APP/assets/resources.zip"
           fi
           find "$APP" -name "*.mp4" -delete || true
