@@ -15,13 +15,13 @@ import sys.io.File;
  *   1.7/1.8.x 没有 GPU 渲染路径（视频帧出不来），
  *   1.9.4+ 又用了 Haxe 4.3 的 `?.` 语法（本仓库 Haxe 4.2.4 编不过）。
  *
- * 🩺 关键修复（本次）：**把视频钉在屏幕上**。
- *   实测：视频能 load、能拿到 1920x1080 的帧、也能 play，但屏幕上看不见。
- *   原因是 FlxVideoSprite 默认 scrollFactor = (1,1)（跟随世界坐标）：
- *     - 挂在 TitleState（相机固定）时正常 → 所以片头能看见；
- *     - 挂在 FlxSubState（PlayState 有 3 个相机、而且相机在跟随角色）时，
- *       画面会随着相机滚动跑出屏幕 → 表现为「只有声音」。
- *   解决：scrollFactor 置 (0,0) + 指定在最后一个相机上绘制（盖在最上层）。
+ * 🩺 目前已排除的可能（实测日志证明）：
+ *   - load 成功、帧 1920x1080 正常、缩放 1280x720 正常；
+ *   - scrollFactor=0,0、相机已指定、xy=0,0 —— 位置/滚动都不是原因。
+ *
+ * 本版新增：直接探测 hxvlc 内部那个「原始 Bitmap」（真正输出视频帧的对象），
+ *   记录它的 visible / alpha / x / y / width / height / parent 是否存在。
+ *   加了一个 1 秒后的定时快照（不依赖 update()，确保能拿到数据）。
  */
 class VideoHandler extends FlxSubState
 {
@@ -60,11 +60,49 @@ class VideoHandler extends FlxSubState
 			{
 				try { old = File.getContent(p); } catch (e:Dynamic) { old = ''; }
 				var lines:Array<String> = old.split('\n');
-				if (lines.length > 80) old = lines.slice(lines.length - 80, lines.length).join('\n') + '\n';
+				if (lines.length > 120) old = lines.slice(lines.length - 120, lines.length).join('\n') + '\n';
 			}
 			File.saveContent(p, old + line + '\n');
 		}
 		catch (e:Dynamic) {}
+	}
+
+	/// 把 hxvlc 内部那个「原始 Bitmap」（真正输出视频帧的对象）的状态记下来。
+	/// 它才是画面能不能出来的关键：FlxSprite 只是从它的 bitmapData 拷了一份。
+	static function diagRawBitmap(tag:String, v:FlxVideoSprite):Void
+	{
+		if (v == null)
+		{
+			diag('[raw:' + tag + '] video 为 null');
+			return;
+		}
+		var b = v.bitmap;
+		if (b == null)
+		{
+			diag('[raw:' + tag + '] bitmap 为 null');
+			return;
+		}
+
+		var parentStr:String = 'null';
+		try
+		{
+			if (b.parent != null) parentStr = 'yes';
+		}
+		catch (e:Dynamic) { parentStr = 'err'; }
+
+		var bmdStr:String = 'null';
+		try
+		{
+			if (b.bitmapData != null) bmdStr = b.bitmapData.width + 'x' + b.bitmapData.height;
+		}
+		catch (e:Dynamic) { bmdStr = 'err'; }
+
+		diag('[raw:' + tag + '] visible=' + b.visible + ' alpha=' + b.alpha
+			+ ' x=' + b.x + ' y=' + b.y
+			+ ' w=' + b.width + ' h=' + b.height
+			+ ' scale=' + b.scaleX + ',' + b.scaleY
+			+ ' parent=' + parentStr + ' bmd=' + bmdStr
+			+ ' flixVisible=' + v.visible + ' flixAlpha=' + v.alpha);
 	}
 
 	/** 播放一个视频。path 可以是绝对路径，也可以是相对游戏目录的路径。 */
@@ -83,18 +121,16 @@ class VideoHandler extends FlxSubState
 		var fileExists:Bool = FileSystem.exists(videoPath);
 		diag('[playVideo] 请求=' + path + ' 解析后=' + videoPath + ' 存在=' + fileExists);
 
-		// 注意：不传 (0, 0) —— hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
-		// 传 (0, 0) 会被当成 instance=0 而编译失败；不传参数在 1.x / 2.x 下都合法。
 		video = new FlxVideoSprite();
 		video.antialiasing = false;
 
-		// ★ 关键：钉在屏幕上，不受相机滚动/缩放影响
+		// 钉在屏幕上，不受相机滚动/缩放影响
 		video.scrollFactor.set(0, 0);
 		try
 		{
 			var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
 			if (cams != null && cams.length > 0)
-				video.cameras = [cams[cams.length - 1]]; // 最上层相机（盖住 HUD）
+				video.cameras = [cams[cams.length - 1]];
 		}
 		catch (e:Dynamic) { diag('[camera] 指定相机失败: ' + e); }
 
@@ -105,7 +141,6 @@ class VideoHandler extends FlxSubState
 
 		if (video.bitmap != null)
 		{
-			// 视频尺寸就绪后铺满屏幕（保持长宽比，多余的裁掉）
 			video.bitmap.onFormatSetup.add(function():Void
 			{
 				if (video == null || video.bitmap == null)
@@ -122,14 +157,13 @@ class VideoHandler extends FlxSubState
 
 				diag('[formatSetup] bitmapData=' + bmd.width + 'x' + bmd.height);
 
-				// 防御：尺寸异常（0 / NaN）时不要算缩放，
-				// 否则会得到 NaN → Std.int(NaN)=0 → setGraphicSize(0,0) → 精灵不可见。
 				if (bmd.width < 2 || bmd.height < 2)
 				{
 					diag('[formatSetup] 警告：尺寸过小，按原尺寸显示');
 					video.updateHitbox();
 					video.screenCenter();
 					video.scrollFactor.set(0, 0);
+					diagRawBitmap('tiny', video);
 					return;
 				}
 
@@ -140,10 +174,12 @@ class VideoHandler extends FlxSubState
 				video.setGraphicSize(tw, th);
 				video.updateHitbox();
 				video.screenCenter();
-				video.scrollFactor.set(0, 0); // screenCenter 后再次确保（防被重置）
+				video.scrollFactor.set(0, 0);
 				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x
 					+ ' xy=' + video.x + ',' + video.y
 					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y);
+
+				diagRawBitmap('afterFormat', video);
 			});
 			video.bitmap.onEndReached.add(onVideoFinished);
 		}
@@ -157,7 +193,6 @@ class VideoHandler extends FlxSubState
 
 		if (!loaded)
 		{
-			// 回退：某些模组把视频放在游戏目录的 assets/videos 下
 			var fileName:String = videoPath.split('/').pop();
 			var retryPath:String = SUtil.getPath() + 'assets/videos/' + fileName;
 			diag('[load] 首次失败，改用资源路径重试: ' + retryPath);
@@ -176,7 +211,6 @@ class VideoHandler extends FlxSubState
 		started = true;
 		diagFrame = 0;
 
-		// 等一帧再 play，避免刚 load 完立刻播放导致首帧黑屏
 		new FlxTimer().start(0.001, function(_:FlxTimer)
 		{
 			if (video != null && playing)
@@ -186,7 +220,13 @@ class VideoHandler extends FlxSubState
 			}
 		});
 
-		// 0.5 秒内不响应跳过，避免开头那一下点击直接把视频跳没
+		// ★ 不依赖 update() 的定时快照：0.5s / 1.5s / 3s 各记一次原始 Bitmap 状态。
+		// 之前只靠 update() 记录，结果一行 [state] 都没写出来（说明 update 没被驱动），
+		// 所以改成定时器，确保一定能拿到数据。
+		new FlxTimer().start(0.5, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t0.5', video); });
+		new FlxTimer().start(1.5, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t1.5', video); });
+		new FlxTimer().start(3.0, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t3.0', video); });
+
 		new FlxTimer().start(0.5, function(_:FlxTimer) canSkipNow = true);
 	}
 
@@ -218,7 +258,6 @@ class VideoHandler extends FlxSubState
 			video = null;
 		}
 
-		// 视频播完后把菜单音乐恢复回来
 		if (FlxG.sound.music != null && !FlxG.sound.music.playing)
 		{
 			try { FlxG.sound.music.play(); } catch (e:Dynamic) {}
@@ -234,30 +273,11 @@ class VideoHandler extends FlxSubState
 	{
 		super.update(elapsed);
 
-		// ==================== 🩺 播放期状态快照 ====================
-		// 如果又出现「只有声音没画面」，看 pe_ios_video.txt 里这几行：
-		//   x/y 是不是在屏幕外、w/h 是不是 0、visible/alpha 是不是不对。
 		if (started && video != null && playing)
 		{
 			diagFrame++;
-			if (diagFrame == 30 || diagFrame == 90 || diagFrame == 240)
-			{
-				var bw:Int = -1;
-				var bh:Int = -1;
-				if (video.bitmap != null && video.bitmap.bitmapData != null)
-				{
-					bw = video.bitmap.bitmapData.width;
-					bh = video.bitmap.bitmapData.height;
-				}
-				diag('[state] f=' + diagFrame
-					+ ' xy=' + video.x + ',' + video.y
-					+ ' size=' + video.width + 'x' + video.height
-					+ ' alpha=' + video.alpha + ' visible=' + video.visible
-					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
-					+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length)
-					+ ' camSize=' + (video.cameras != null && video.cameras.length > 0 ? (video.cameras[0].width + 'x' + video.cameras[0].height) : '-')
-					+ ' bmd=' + bw + 'x' + bh);
-			}
+			if (diagFrame == 30 || diagFrame == 120)
+				diagRawBitmap('f' + diagFrame, video);
 		}
 
 		if (!started || !playing || !canSkip || !canSkipNow) return;
