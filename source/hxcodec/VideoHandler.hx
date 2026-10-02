@@ -11,22 +11,17 @@ import sys.io.File;
 /**
  * [PE-iOS] hxCodec 兼容层 —— 用 hxvlc 实现真正的视频播放。
  *
- * 为什么需要这个文件：
- *   - 引擎（PlayState.hx 等）和大量老模组写的都是 `import hxcodec.VideoHandler` / `new MP4Handler()`；
- *   - 但官方 hxCodec 在 iOS 上是个空壳（include.xml 的 ios 段只声明了几个 Apple 框架，
- *     完全没有链接 libvlc），拿它播视频只会黑屏/直接挂；
- *   - hxvlc 自带 libvlc 的 iOS 静态库（libvlc_device.a），所以 iOS 上让它干活，
- *     再补一个同名的 VideoHandler，让老模组一行代码都不用改。
- *
  * ⚠ hxvlc 版本要求：**1.9.3**
- *   原因一：1.7/1.8.x 的 FlxVideoSprite 没有 `bitmap.forceRendering = true`，
- *   也不带 1.9.x 的 GPU 纹理渲染路径 → 表现为「能播出声音、但画面出不来」。
- *   原因二：1.9.4+ / 2.x 用了 `bitmap?.xxx`（Haxe 4.3 安全导航语法），
- *   本仓库 Haxe 固定 4.2.4，会直接语法报错。
+ *   1.7/1.8.x 没有 GPU 渲染路径（视频帧出不来），
+ *   1.9.4+ 又用了 Haxe 4.3 的 `?.` 语法（本仓库 Haxe 4.2.4 编不过）。
  *
- * 🩺 诊断：播视频全过程会追加写入 <游戏目录>/pe_ios_video.txt，
- *   含路径、文件是否存在、load 返回值、onFormatSetup 是否触发、bitmapData 尺寸等。
- *   再出现「有声音无画面」时，直接看这个文件即可定位。
+ * 🩺 关键修复（本次）：**把视频钉在屏幕上**。
+ *   实测：视频能 load、能拿到 1920x1080 的帧、也能 play，但屏幕上看不见。
+ *   原因是 FlxVideoSprite 默认 scrollFactor = (1,1)（跟随世界坐标）：
+ *     - 挂在 TitleState（相机固定）时正常 → 所以片头能看见；
+ *     - 挂在 FlxSubState（PlayState 有 3 个相机、而且相机在跟随角色）时，
+ *       画面会随着相机滚动跑出屏幕 → 表现为「只有声音」。
+ *   解决：scrollFactor 置 (0,0) + 指定在最后一个相机上绘制（盖在最上层）。
  */
 class VideoHandler extends FlxSubState
 {
@@ -47,6 +42,7 @@ class VideoHandler extends FlxSubState
 	private var ended:Bool = false;
 	private var started:Bool = false;
 	private var canSkipNow:Bool = false;
+	private var diagFrame:Int = 0;
 
 	public function new():Void
 	{
@@ -54,7 +50,6 @@ class VideoHandler extends FlxSubState
 	}
 
 	// ==================== 🩺 诊断写盘 ====================
-	// 追加一行到 <游戏目录>/pe_ios_video.txt（只保留最近 60 行，避免无限增长）。
 	static function diag(line:String):Void
 	{
 		try
@@ -65,7 +60,7 @@ class VideoHandler extends FlxSubState
 			{
 				try { old = File.getContent(p); } catch (e:Dynamic) { old = ''; }
 				var lines:Array<String> = old.split('\n');
-				if (lines.length > 60) old = lines.slice(lines.length - 60, lines.length).join('\n') + '\n';
+				if (lines.length > 80) old = lines.slice(lines.length - 80, lines.length).join('\n') + '\n';
 			}
 			File.saveContent(p, old + line + '\n');
 		}
@@ -88,16 +83,25 @@ class VideoHandler extends FlxSubState
 		var fileExists:Bool = FileSystem.exists(videoPath);
 		diag('[playVideo] 请求=' + path + ' 解析后=' + videoPath + ' 存在=' + fileExists);
 
-		if (!fileExists)
-			diag('[playVideo] 警告：文件不存在，libvlc 会加载失败');
-
-		// 注意：这里刻意不传 (0, 0)。hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
-		// 传 (0, 0) 会被当成「instance=0, x=0」，类型不匹配直接编译失败；
-		// 而不传任何参数在 1.x / 2.x 下都合法（x/y 默认为 0）。
+		// 注意：不传 (0, 0) —— hxvlc 2.x 的签名是 new(?instance, ?x, ?y)，
+		// 传 (0, 0) 会被当成 instance=0 而编译失败；不传参数在 1.x / 2.x 下都合法。
 		video = new FlxVideoSprite();
 		video.antialiasing = false;
+
+		// ★ 关键：钉在屏幕上，不受相机滚动/缩放影响
+		video.scrollFactor.set(0, 0);
+		try
+		{
+			var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
+			if (cams != null && cams.length > 0)
+				video.cameras = [cams[cams.length - 1]]; // 最上层相机（盖住 HUD）
+		}
+		catch (e:Dynamic) { diag('[camera] 指定相机失败: ' + e); }
+
 		add(video);
-		diag('[create] FlxVideoSprite 已创建，bitmap=' + (video.bitmap == null ? 'null' : 'ok'));
+		diag('[create] FlxVideoSprite 已创建 bitmap=' + (video.bitmap == null ? 'null' : 'ok')
+			+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
+			+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length));
 
 		if (video.bitmap != null)
 		{
@@ -106,37 +110,40 @@ class VideoHandler extends FlxSubState
 			{
 				if (video == null || video.bitmap == null)
 				{
-					diag('[formatSetup] 警告：video 或 bitmap 已为 null，放弃缩放');
+					diag('[formatSetup] 警告：video 或 bitmap 已为 null');
 					return;
 				}
 				var bmd = video.bitmap.bitmapData;
 				if (bmd == null)
 				{
-					diag('[formatSetup] 警告：bitmapData 为 null（视频帧没准备好）→ 画面会是空白');
+					diag('[formatSetup] 警告：bitmapData 为 null → 画面会是空白');
 					return;
 				}
 
 				diag('[formatSetup] bitmapData=' + bmd.width + 'x' + bmd.height);
 
 				// 防御：尺寸异常（0 / NaN）时不要算缩放，
-				// 否则会得到 NaN → Std.int(NaN)=0 → setGraphicSize(0,0)
-				// → 精灵完全不可见（正好就是「有声音无画面」的样子）。
+				// 否则会得到 NaN → Std.int(NaN)=0 → setGraphicSize(0,0) → 精灵不可见。
 				if (bmd.width < 2 || bmd.height < 2)
 				{
-					diag('[formatSetup] 警告：尺寸过小，跳过缩放，按原尺寸显示');
+					diag('[formatSetup] 警告：尺寸过小，按原尺寸显示');
 					video.updateHitbox();
 					video.screenCenter();
+					video.scrollFactor.set(0, 0);
 					return;
 				}
 
 				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
-				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检（NaN != NaN）
+				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
 				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
 				var th:Int = Std.int(Math.max(1, bmd.height * scale));
 				video.setGraphicSize(tw, th);
 				video.updateHitbox();
 				video.screenCenter();
-				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x);
+				video.scrollFactor.set(0, 0); // screenCenter 后再次确保（防被重置）
+				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x
+					+ ' xy=' + video.x + ',' + video.y
+					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y);
 			});
 			video.bitmap.onEndReached.add(onVideoFinished);
 		}
@@ -145,15 +152,7 @@ class VideoHandler extends FlxSubState
 		if (loop) options = ['--input-repeat=999999'];
 
 		var loaded:Bool = false;
-		try
-		{
-			loaded = video.load(videoPath, options);
-		}
-		catch (e:Dynamic)
-		{
-			diag('[load] 抛异常: ' + e);
-			loaded = false;
-		}
+		try { loaded = video.load(videoPath, options); } catch (e:Dynamic) { diag('[load] 抛异常: ' + e); loaded = false; }
 		diag('[load] 返回值=' + loaded);
 
 		if (!loaded)
@@ -175,6 +174,7 @@ class VideoHandler extends FlxSubState
 
 		playing = true;
 		started = true;
+		diagFrame = 0;
 
 		// 等一帧再 play，避免刚 load 完立刻播放导致首帧黑屏
 		new FlxTimer().start(0.001, function(_:FlxTimer)
@@ -234,6 +234,32 @@ class VideoHandler extends FlxSubState
 	{
 		super.update(elapsed);
 
+		// ==================== 🩺 播放期状态快照 ====================
+		// 如果又出现「只有声音没画面」，看 pe_ios_video.txt 里这几行：
+		//   x/y 是不是在屏幕外、w/h 是不是 0、visible/alpha 是不是不对。
+		if (started && video != null && playing)
+		{
+			diagFrame++;
+			if (diagFrame == 30 || diagFrame == 90 || diagFrame == 240)
+			{
+				var bw:Int = -1;
+				var bh:Int = -1;
+				if (video.bitmap != null && video.bitmap.bitmapData != null)
+				{
+					bw = video.bitmap.bitmapData.width;
+					bh = video.bitmap.bitmapData.height;
+				}
+				diag('[state] f=' + diagFrame
+					+ ' xy=' + video.x + ',' + video.y
+					+ ' size=' + video.width + 'x' + video.height
+					+ ' alpha=' + video.alpha + ' visible=' + video.visible
+					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
+					+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length)
+					+ ' camSize=' + (video.cameras != null && video.cameras.length > 0 ? (video.cameras[0].width + 'x' + video.cameras[0].height) : '-')
+					+ ' bmd=' + bw + 'x' + bh);
+			}
+		}
+
 		if (!started || !playing || !canSkip || !canSkipNow) return;
 
 		var pressed:Bool = FlxG.keys.justPressed.ANY || FlxG.mouse.justPressed;
@@ -256,7 +282,6 @@ class VideoHandler extends FlxSubState
 		var candidate:String = SUtil.getPath() + path;
 		if (FileSystem.exists(candidate)) return candidate;
 
-		// 再试：相对游戏目录的 assets/videos/
 		var inAssets:String = SUtil.getPath() + 'assets/videos/' + path;
 		if (FileSystem.exists(inAssets)) return inAssets;
 
