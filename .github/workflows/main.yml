@@ -12,7 +12,6 @@ jobs:
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
       # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
-      # 配合下面的 actions/cache 后，只改几个 .hx 时绝大部分 .o 直接命中。
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
@@ -25,7 +24,6 @@ jobs:
           git checkout -f HEAD -- assets
           git checkout -f HEAD -- example_mods
           echo "assets 文件数: $(find assets -type f | wc -l)"
-          echo "example_mods 文件数: $(find example_mods -type f | wc -l)"
 
       - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
         run: |
@@ -33,26 +31,45 @@ jobs:
           python3 tools/patch_lua_guard.py
           grep -c "LuaGuard" source/FunkinLua.hx || true
 
-      - name: 打包内置资源 resources.zip（按游戏目录结构：assets/… 与 mods/…）
+      - name: 打包内置资源 resources.zip（只放 assets，不放 mods）
         run: |
           set -Eeuo pipefail
           rm -rf /tmp/pack
           mkdir -p /tmp/pack/assets
+
+          # 解压后必须是 <Documents>/assets/<...>（例如 assets/music/freakyMenu.ogg），
+          # 不能多一层 preload。运行时 Paths.getPath()/returnSound() 全按 assets/… 找文件。
+          # 仓库里这些资源放在 assets/preload/ 下（OpenFL 的资源前缀），
+          # 所以要打 zip 时把 preload 里的内容平移到 assets/ 根下。
           cp -R assets/preload/. /tmp/pack/assets/
+          # 字体在 assets/fonts（不在 preload 里），运行时按 assets/fonts/… 读，也要带上
           if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
-          cp -R example_mods /tmp/pack/mods
-          echo "PE iOS: mods folder" > /tmp/pack/mods/readme.txt
-          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets mods )
+
+          # ❗ 刻意不打包 example_mods！
+          # 之前把它当作 mods/ 一起解压，会导致：删掉重装后内置解压出一套
+          # 「只有 readme + pack.json 的空模组」，用户再放入自己的 mods 时就变成两套混合，
+          # 引擎可能把那个空模组当模组加载 → 直接崩。
+          # 现在 mods 目录改由 SUtil.ensureAssets() 解压后创建（空气泡即可），
+          # 用户的 mods 永远是干净的。
+
+          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets )
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
-          unzip -l assets/preload/resources.zip | head -10
+          echo "### zip 内容抽样（应只有 assets/…，确认没有 preload 层也没有 mods）###"
+          unzip -l assets/preload/resources.zip | head -12
+          echo "### 确认 zip 里没有 mods ###"
+          if unzip -l assets/preload/resources.zip | grep -qE '^\s+[0-9]+\s+[0-9-]+\s+[0-9:]+\s+mods/'; then
+            echo "::error::resources.zip 里不应包含 mods，请检查打包步骤"
+            exit 1
+          fi
+          echo "OK：zip 内无 mods"
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
         with:
           path: _haxelib
-          key: psych063-haxelib-v13
+          key: psych063-haxelib-v14
           restore-keys: |
             psych063-haxelib-
 
@@ -60,7 +77,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .hxcpp-cache
-          key: hxcpp-cache-haxe424-v1
+          key: hxcpp-cache-haxe424-v2
           restore-keys: |
             hxcpp-cache-haxe424-
 
@@ -79,7 +96,6 @@ jobs:
           mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
           mkdir -p "$HXCPP_COMPILE_CACHE"
-          echo "### 编译缓存现有体积"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
       - name: 安装依赖
@@ -94,12 +110,11 @@ jobs:
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
           # hxvlc 版本选择（反复踩坑后的结论）：
-          #   * 1.7 / 1.8.x：FlxVideoSprite 没有 `bitmap.forceRendering = true`，
-          #     也不带 1.9.x 的 GPU 纹理渲染路径 → 表现为「能播出声音但画面出不来」；
-          #   * 1.9.4 / 1.9.5 / 2.x：代码里用了 `bitmap?.xxx`（Haxe 4.3 安全导航语法），
-          #     本仓库 Haxe 固定 4.2.4 → 直接语法报错「Unexpected .」；
-          #   * 1.9.3（2024-10-22）：既有 forceRendering，又是 `if (bitmap != null)` 写法，
-          #     且 iOS 库在 2024-06-30 PR #57（include visual module）之后 → 正好可用。
+          #   * 1.7 / 1.8.x：没有 GPU 渲染路径（bitmap.forceRendering / 纹理）
+          #     → 表现为「有声音、画面出不来」；
+          #   * 1.9.4+ / 2.x：用了 Haxe 4.3 的 `?.` 安全导航语法 → Haxe 4.2.4 语法报错；
+          #   * 1.9.3：既有 forceRendering，又是 if(bitmap != null) 写法，发布在
+          #     2024-06-30 PR #57（android/ios libs include visual module）之后 → 正好可用。
           echo "## hxvlc 1.9.3"
           rm -rf "$HAXELIB_ROOT/hxvlc"
           haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
@@ -113,19 +128,16 @@ jobs:
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
           haxelib list
 
-      - name: 自检 hxvlc（版本 + 关键字段 + iOS 静态库）
+      - name: 自检 hxvlc
         run: |
           set +e
           haxelib path hxvlc
           HV=$(ls -d "$HAXELIB_ROOT/hxvlc/"* 2>/dev/null | head -1)
-          echo "hxvlc 目录: $HV"
           grep -m1 'version' "$HV/haxelib.json"
-          echo "### forceRendering 是否存在于 openfl/Video.hx"
+          echo "### forceRendering 是否存在"
           grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
-          echo "### FlxVideoSprite 是否使用 Haxe4.3 的 ?. 语法（应为空）"
+          echo "### FlxVideoSprite 是否使用 ?. 语法（应为空）"
           grep -n '\?\.[a-zA-Z]' "$HV/source/hxvlc/flixel/FlxVideoSprite.hx" || echo "（无，OK）"
-          echo "### iOS 静态库体积"
-          find "$HV" -name "*.a" -exec ls -lh {} \; | head
 
       - name: 初始化 lime
         run: |
@@ -155,30 +167,21 @@ jobs:
           RC=$?
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
-
-          echo "### 日志里 Compiling 行数（越少说明编译缓存命中越多）"
+          echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
           grep -c "Compiling" build.log || true
-          echo "### 编译日志末尾 60 行 ###"
           tail -60 build.log
           echo "### Haxe 报错行（.hx:行号）###"
           grep -nE '\.hx:[0-9]+' build.log | tail -40
           echo "### 链接报错行 ###"
           grep -nE '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: ' build.log | tail -20
-
           ERR="$(grep -E '\.hx:[0-9]+' build.log | tail -40)"
           if [ -z "$ERR" ]; then ERR="$(tail -25 build.log)"; fi
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
-
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
-          if [ -z "$APP" ]; then
-            echo "### 没有 .app 产物 ###"
-            exit 1
-          fi
+          if [ -z "$APP" ]; then echo "### 没有 .app 产物 ###"; exit 1; fi
           echo "产物: $APP"
-          echo "### 缓存体积（构建后）"
-          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
           exit $RC
 
       - name: 上传构建日志
