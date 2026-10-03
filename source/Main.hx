@@ -32,20 +32,30 @@ using StringTools;
 class Main extends Sprite
 {
 	/**
-	 * [PE-iOS] 顶部黑边比例（对齐「无视频版」画面）。
+	 * [PE-iOS] 顶部黑边比例。
 	 *
 	 * 实测参照（iPad Pro 11"，屏幕 2420x1668，stage 1024x768）：
-	 *   无视频版：顶部留黑 ≈ 202px（屏幕坐标），【内容一直蓴到屏幕最底部】。
+	 *   无视频版：顶部留黑 ≈ 202px（屏幕坐标），内容一直蓴到屏幕最底部。
 	 *   换算到 stage：202 / 2.172 ≈ 92px，即 768 的 12.1%。
-	 *
-	 * ⚠ 为什么不能用「16:9 居中」：
-	 *   居中会把画面上下各留一半黑边，画布底部就离屏幕底部 208px，
-	 *   结果手机触控色带（画在画布底部）会悬在半空、不在屏幕最下方。
-	 *   所以这里采用「顶部留黑 + 内容贴底」，与无视频版一致。
-	 *
-	 * 想恢复“铺满屏幕”：把本常量改为 0。
 	 */
 	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
+
+	/**
+	 * [PE-iOS] 实际下移量占“顶部黑边”的比例（折中系数）。
+	 *
+	 * 两个需求是矛盾的，这里取折中：
+	 *   - 完全不下移（0.0）：画面居中，打歌不会“被放大/底部被裁”，
+	 *     但触控色带会悬在屏幕上边（离底约 208px）；
+	 *   - 完全下移（1.0）：色带能贴到屏幕底，但画面底部会被裁 208px，
+	 *     表现出来就是“打歌时画面放大”。
+	 * 0.5 时：色带下移约 104px（已经很接近底部），
+	 * 底部裁切同样减半（104px），“放大”感明显减轻。
+	 *
+	 * 想回哪边就把这两个常量往哪边调：
+	 *   只要不裁切 → 把本常量改 0.0；
+	 *   只要色带贴底 → 改成 1.0。
+	 */
+	static inline var IOS_YOFFSET_FACTOR:Float = 0.5;
 
 	var game = {
 		width: 1280,
@@ -87,19 +97,15 @@ class Main extends Sprite
 	}
 
 	// ==================== [PE-iOS] 视频 Bitmap 尺寸纠正 ====================
-	// hxvlc 内部会把视频帧写进一个原始 Bitmap（hxvlc.openfl.Video，继承 openfl.display.Bitmap），
-	// 并 addChild 到 FlxG.game 上；它的尺寸是【视频原始分辨率】（如 1920x1080），
-	// 而游戏画布只有 1280x720 → 它比画布大 1.5 倍，表现出来就是“视频被放大了”。
-	//
-	// 这里每 12 帧把这个 Bitmap 的缩放对到画布大小（只改尺寸，不动 visible，
-	// 避免误伤真正在显示的那条路径），并写诊断文件。
+	// 只在确实存在 hxvlc 的 Video Bitmap 时才干活（无视频时零开销），
+	// 把它的缩放对到画布大小（修“视频被放大”）。
 	private function scaleVideoBitmaps():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
 		var g = FlxG.game;
 		if (g == null) return;
 
-		var report:StringBuf = new StringBuf();
+		var report:StringBuf = null;
 		var found:Int = 0;
 
 		for (i in 0...g.numChildren)
@@ -110,8 +116,6 @@ class Main extends Sprite
 			var cn:String = '';
 			try { cn = Type.getClassName(Type.getClass(c)); } catch (e:Dynamic) {}
 			if (cn == null || cn.indexOf('Video') < 0) continue;
-
-			found++;
 
 			var w:Float = 0;
 			var h:Float = 0;
@@ -126,33 +130,30 @@ class Main extends Sprite
 			}
 			catch (e:Dynamic) {}
 
-			if (w < 2 || h < 2)
-			{
-				report.add('[' + i + '] ' + cn + ' w=' + w + ' h=' + h + '（无帧数据）\n');
-				continue;
-			}
+			// 只有真正拿到帧的才处理（否则无视频时每帧都白跑）
+			if (w < 2 || h < 2) continue;
+
+			found++;
+			if (report == null) report = new StringBuf();
 
 			try
 			{
-				// 只做「缩放到画布」：与 FlxSprite 的铺满策略一致（保持比例、居中裁切）
 				var sc:Float = Math.max(FlxG.width / w, FlxG.height / h);
 				if (sc <= 0 || sc != sc) sc = 1;
 				Reflect.setProperty(c, 'scaleX', sc);
 				Reflect.setProperty(c, 'scaleY', sc);
-				// 居中：让放大后的内容围绕画布中心
 				Reflect.setProperty(c, 'x', (FlxG.width - w * sc) / 2);
 				Reflect.setProperty(c, 'y', (FlxG.height - h * sc) / 2);
-
-				var nsx:Float = Reflect.getProperty(c, 'scaleX');
-				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> scale=' + nsx + '\n');
+				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> scale=' + sc + '\n');
 			}
 			catch (e:Dynamic)
 			{
-				report.add('[' + i + '] ' + cn + ' 设置失败: ' + e + '\n');
+				if (report != null) report.add('[' + i + '] ' + cn + ' 设置失败: ' + e + '\n');
 			}
 		}
 
-		if (found > 0)
+		// 没有视频时不写文件（也减少磁盘 IO）
+		if (found > 0 && report != null)
 		{
 			try { File.saveContent(SUtil.getPath() + 'pe_ios_videobitmap.txt', report.toString()); } catch (e:Dynamic) {}
 		}
@@ -161,24 +162,14 @@ class Main extends Sprite
 
 	private function setupGame():Void
 	{
-		// ==================== [PE-iOS] 视频渲染路径 ====================
-		// hxvlc 默认走 GPU 纹理输出帧；实测打歌场景不出图，这里统一改走 CPU 位图路径。
-		#if (VIDEOS_ALLOWED && ios)
-		try
-		{
-			hxvlc.openfl.Video.useTexture = false;
-			trace('[PE-iOS] 视频渲染：已切换为 CPU 位图路径 (Video.useTexture=false)');
-		}
-		catch (e:Dynamic)
-		{
-			trace('[PE-iOS] 切换视频渲染路径失败（已忽略）: ' + e);
-		}
-		#end
+		// 注意：这里【不再】强制 Video.useTexture=false。
+		// 那是排查「打歌时视频没画面」时的临时手段，代价是每帧多拷一份
+		// 1920x1080 的帧（约 8MB）到内存，容易造成随机掉帧甚至卡死。
+		// 视频现在能正常播放，所以回默认的 GPU 纹理路径。
 
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// 顶部留黑 + 内容贴底（对齐无视频版；同时保证触控色带落在屏幕最下方）
 		var topInset:Int = 0;
 		var viewHeight:Int = stageHeight;
 		if (IOS_TOP_INSET_RATIO > 0)
@@ -201,12 +192,15 @@ class Main extends Sprite
 			game.height = Math.ceil(viewHeight / game.zoom);
 		}
 
+		var yOffset:Int = Std.int(topInset * IOS_YOFFSET_FACTOR);
+
 		var info:String = 'stage=' + stageWidth + 'x' + stageHeight
 			+ '\ntopInset=' + topInset
+			+ '\nyOffset=' + yOffset + '（折中系数 ' + IOS_YOFFSET_FACTOR + '）'
 			+ '\nviewHeight=' + viewHeight
 			+ '\ncanvas=' + game.width + 'x' + game.height
 			+ '\nzoom=' + game.zoom + '\n';
-		trace('[PE-iOS] 视口(顶部留黑+贴底)：' + info.replace('\n', ' '));
+		trace('[PE-iOS] 视口：' + info.replace('\n', ' '));
 
 		#if ios
 		try { File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt', info); } catch (e:Dynamic) {}
@@ -219,17 +213,16 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// ★ 贴底：FlxGame 自己会把画面居中（算出 y=topInset/2），
-		// 这里把它覆写成 topInset，让内容一直蓴到 stage 底部（=> 屏幕上也就贴底了）。
-		// 注意是【直接赋值】而不是累加，所以不存在双重偏移。
-		if (topInset > 0)
+		// 折中下移（直接赋值，不累加，所以不存在双重偏移）：
+		// Flixel 自己会算 y = topInset/2；这里覆写成 topInset*factor。
+		if (yOffset > 0)
 		{
-			flxGame.y = topInset;
+			flxGame.y = yOffset;
 			var frames:Int = 0;
 			var applier:Event->Void = null;
 			applier = function(e:Event):Void
 			{
-				flxGame.y = topInset;
+				flxGame.y = yOffset;
 				frames++;
 				if (frames > 60 && Lib.current.stage != null)
 					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
@@ -237,7 +230,7 @@ class Main extends Sprite
 			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
 		}
 
-		// 每 12 帧把 hxvlc 的原始视频 Bitmap 缩放到画布大小（修“视频被放大”）
+		// 视频 Bitmap 尺寸纠正（无视频时内部会直接跳过，不产生开销）
 		Lib.current.stage.addEventListener(Event.ENTER_FRAME, function(e:Event):Void
 		{
 			scanFrames++;
@@ -246,8 +239,8 @@ class Main extends Sprite
 		});
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
-		if (topInset > 0)
-			fpsVar.y = topInset + 3;
+		if (yOffset > 0)
+			fpsVar.y = yOffset + 3;
 		addChild(fpsVar);
 		Lib.current.stage.align = "tl";
 		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
@@ -268,13 +261,13 @@ class Main extends Sprite
 		if (!DiscordClient.isInitialized) {
 			DiscordClient.initialize();
 			Application.current.window.onClose.add(function() {
-				DiscordClient.shutdown();
+				DiscordClient.down();
 			});
 		}
 		#end
 	}
 
-	// Code was entirely made by sqirra-rng for their fnf engine named "Izzy Engine", big props to them!!!
+	// Code was entirely made by sqirra-rng for their fnz engine named "Izzy Engine", big props to them!!!
 	#if CRASH_HANDLER
 	public static function onCrash(e:UncaughtErrorEvent):Void
 		{
