@@ -30,16 +30,7 @@ using StringTools;
 
 class Main extends Sprite
 {
-	/**
-	 * [PE-iOS] 目标画面宽高比（对齐「无视频版」）。
-	 *
-	 * iPad Pro 11" 屏幕是 2420x1668（比例 1.45），而游戏画面是 16:9（1.78），
-	 * 所以画面本来就该上下留黑，而且**上下对称**：
-	 *   画面宽 2220 → 高 1249（=2220*9/16），垂直居中，
-	 *   上下各约 209px 黑边、左右各 100px。
-	 *
-	 * 想恢复“铺满屏幕”：把本常量改为 0 即可。
-	 */
+	/** [PE-iOS] 目标画面宽高比（对齐「无视频版」）。改成 0 即恢复铺满。 */
 	static inline var IOS_TARGET_ASPECT:Float = 16.0 / 9.0;
 
 	var game = {
@@ -53,6 +44,9 @@ class Main extends Sprite
 	};
 
 	public static var fpsVar:FPS;
+
+	/// 诊断帧计数（视频 Bitmap 扫描用）
+	var scanFrames:Int = 0;
 
 	public static function main():Void
 	{
@@ -78,36 +72,89 @@ class Main extends Sprite
 		setupGame();
 	}
 
-	private function setupGame():Void
+	// ==================== [PE-iOS] 视频显示兜底 ====================
+	// 背景：hxvlc 的 FlxVideoSprite 会把视频帧交给一个内部的 OpenFL Bitmap
+	//（hxvlc.openfl.Video，继承自 openfl.display.Bitmap，被 addChild 到 FlxG.game 上），
+	// 该 Bitmap 默认 visible=false，然后靠 FlxSprite 从它的 bitmapData 中转显示。
+	//
+	// 实测：标题页（单相机、挂在 FlxState）能正常显示；
+	// 打歌场景（多相机、挂在 FlxSubState）无论 GPU 还是 CPU 渲染路径都不出画面，
+	// 而 load / 帧尺寸 / 缩放 / 位置 / scrollFactor / 相机都已逐一排除。
+	//
+	// 所以这里直接把那个原始 Bitmap 显示出来 —— 绕开 FlxSprite 中转，
+	// 这也是 libVLC 官方示例使用的显示路径，最直接可靠。
+	private function scanAndShowVideoBitmaps():Void
 	{
-		// ==================== [PE-iOS] 视频渲染路径 ====================
-		// hxvlc 默认走 GPU 纹理（OpenFL RectangleTexture）输出视频帧。
-		// 实测：标题页（单相机）能正常显示，但打歌场景（多相机 + 自定义 HUD 相机）
-		// 会出现「只有声音、没画面」。怀疑就是这条 GPU 纹理路径不出图。
-		// 这里统一改走 CPU 位图路径 —— 慢一点，但兼容性好得多。
-		// （放在 Main 里是为了保证无论哪个状态播视频都能生效）
 		#if (VIDEOS_ALLOWED && ios)
-		try
+		var g = FlxG.game;
+		if (g == null) return;
+
+		var report:StringBuf = new StringBuf();
+		var found:Int = 0;
+
+		for (i in 0...g.numChildren)
 		{
-			hxvlc.openfl.Video.useTexture = false;
-			trace('[PE-iOS] 视频渲染：已切换为 CPU 位图路径 (Video.useTexture=false)');
+			var c = g.getChildAt(i);
+			if (c == null) continue;
+
+			var cls = Type.getClass(c);
+			var cn:String = cls != null ? Type.getClassName(cls) : '';
+			if (cn == null || cn.indexOf('Video') < 0) continue;
+
+			found++;
+
+			var w:Float = 0;
+			var h:Float = 0;
+			try
+			{
+				var bmd:Dynamic = Reflect.getProperty(c, 'bitmapData');
+				if (bmd != null)
+				{
+					w = Reflect.getProperty(bmd, 'width');
+					h = Reflect.getProperty(bmd, 'height');
+				}
+			}
+			catch (e:Dynamic) {}
+
+			if (w < 2 || h < 2)
+			{
+				report.add('[' + i + '] ' + cn + ' w=' + w + ' h=' + h + '（无帧数据，跳过）\n');
+				continue;
+			}
+
+			// 让它直接显示，并铺满 FlxGame 的逻辑区域（1280x720）
+			try
+			{
+				Reflect.setProperty(c, 'visible', true);
+				Reflect.setProperty(c, 'x', 0.0);
+				Reflect.setProperty(c, 'y', 0.0);
+				Reflect.setProperty(c, 'scaleX', FlxG.width / w);
+				Reflect.setProperty(c, 'scaleY', FlxG.height / h);
+
+				var vis:Bool = Reflect.getProperty(c, 'visible');
+				var sx:Float = Reflect.getProperty(c, 'scaleX');
+				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> visible=' + vis + ' scale=' + sx + '\n');
+			}
+			catch (e:Dynamic)
+			{
+				report.add('[' + i + '] ' + cn + ' 设置失败: ' + e + '\n');
+			}
 		}
-		catch (e:Dynamic)
+
+		if (found > 0)
 		{
-			trace('[PE-iOS] 切换视频渲染路径失败（已忽略）: ' + e);
+			try { File.saveContent(SUtil.getPath() + 'pe_ios_videobitmap.txt', report.toString()); } catch (e:Dynamic) {}
 		}
 		#end
+	}
 
+	private function setupGame():Void
+	{
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// [PE-iOS] 只决定「画布多大（即缩放倍数）」，居中交给 HaxeFlixel 自己处理。
-		//
-		// 踩坑记录：曾经在这里额外设 `flxGame.y = 偏移量`，想自己把画面推到中间，
-		// 但 FlxGame 内部本来就会按缩放比例把自己居中 → 双重偏移 →
-		// 画面被推下去、底部被裁，表现为「打歌时像放大了一样」、
-		// hitbox 底部的颜色条看着“跑到中间”、大特效盖不住全屏。
-		// 所以：不碰 flxGame.x / flxGame.y，只算尺寸。
+		// [PE-iOS] 只决定画布尺寸；居中交给 HaxeFlixel 自己处理（切勿再手动设 flxGame.y，
+		// 否则双重偏移 → 底部被裁）。
 		var viewHeight:Int = stageHeight;
 		if (IOS_TARGET_ASPECT > 0)
 		{
@@ -131,7 +178,6 @@ class Main extends Sprite
 			+ '\nzoom=' + game.zoom + '\n';
 		trace('[PE-iOS] 视口(16:9)：' + info.replace('\n', ' '));
 
-		// 标记文件：确认当前安装的包到底包含哪版改动（排查用）
 		#if ios
 		try { File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt', info); } catch (e:Dynamic) {}
 		#end
@@ -143,33 +189,13 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// 诊断：第 5 / 30 / 120 帧记录真实数值（包含 FlxGame 自己的 x/y/scale）
+		// 每帧（每 6 帧一次）扫描并显示 hxvlc 内部的原始视频 Bitmap
+		Lib.current.stage.addEventListener(Event.ENTER_FRAME, function(e:Event):Void
 		{
-			var frames:Int = 0;
-			var applier:Event->Void = null;
-			applier = function(e:Event):Void
-			{
-				frames++;
-				if (frames == 5 || frames == 30 || frames == 120)
-				{
-					try
-					{
-						var out:String = 'frame=' + frames + '\n'
-							+ info
-							+ 'FlxG=' + FlxG.width + 'x' + FlxG.height + '\n'
-							+ 'cam0=' + (FlxG.camera != null ? (FlxG.camera.width + 'x' + FlxG.camera.height) : 'null') + '\n'
-							+ 'game.x=' + flxGame.x + ' game.y=' + flxGame.y + '\n'
-							+ 'game.scale=' + flxGame.scaleX + ',' + flxGame.scaleY + '\n'
-							+ 'game.size=' + flxGame.width + 'x' + flxGame.height + '\n';
-						File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt', out);
-					}
-					catch (err:Dynamic) {}
-				}
-				if (frames > 120 && Lib.current.stage != null)
-					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
-			};
-			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
-		}
+			scanFrames++;
+			if (scanFrames % 6 == 0)
+				scanAndShowVideoBitmaps();
+		});
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
 		addChild(fpsVar);
@@ -198,7 +224,7 @@ class Main extends Sprite
 		#end
 	}
 
-	// Code was entirely made by sqirra-rng for their fnf engine named "Izzy Engine", big props to them!!!
+	// Code was entirely made by sqirra-rng for their fnz engine named "Izzy Engine", big props to them!!!
 	#if CRASH_HANDLER
 	public static function onCrash(e:UncaughtErrorEvent):Void
 		{
