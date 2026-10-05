@@ -209,6 +209,32 @@ class PlayState extends MusicBeatState
 	 */
 	static inline var PEI_AUTO_CAMZOOM:Bool = false;
 
+	/**
+	 * [PE-iOS] 相机缩放「回中」开关（与 PEI_AUTO_CAMZOOM 独立）。
+	 *
+	 * 作用：每帧把 camHUD.zoom 拉回 1、FlxG.camera.zoom 拉回 defaultCamZoom。
+	 * 这是【安全阀】，不是【推近】—— 它只让缩放衰减回基准，绝不主动放大。
+	 *
+	 * 为什么必须保留（用户实测 bug）：
+	 *   模组的 'Add Camera Zoom' 事件（case 'Add Camera Zoom'）会主动
+	 *   `FlxG.camera.zoom += camZoom; camHUD.zoom += hudZoom;`。
+	 *   原版 PE 靠 opponentNoteHit 里 `camZooming = true;` 触发上面的 lerp 把值拉回；
+	 *   我们禁用引擎自动推近后若连带关掉 lerp，模组事件推高的 zoom 就【永远回不来】，
+	 *   越推越高 ⇒ 「打歌越打越放大、箭头血条只剩一半」。
+	 *
+	 * 为什么「覆盖原版周」的模组看不出来：
+	 *   tutorial 在 moveCameraSection/tweenCamIn 里有专门的一段
+	 *   `if (song == 'tutorial' && zoom != 1) tween zoom → 1`，
+	 *   替我们把 zoom 拉回了；【不覆盖原版周】的模组没有这段兜底 ⇒ 问题立即暴露。
+	 *
+	 * 本开关默认 true：只回中、不推近。
+	 * 想让相机【完全不干预】（连回中都不要，纯交给模组）：改为 false。
+	 */
+	static inline var PEI_CAMZOOM_RECENTER:Bool = true;
+
+	/// [PE-iOS] 相机诊断帧计数（见 update() 里的 pe_ios_cam.txt 落盘）
+	private var peDiagFrames:Int = 0;
+
 	private var curSong:String = "";
 
 	public var gfSpeed:Int = 1;
@@ -3123,7 +3149,21 @@ class PlayState extends MusicBeatState
 			// Conductor.lastSongPos = FlxG.sound.music.time;
 		}
 
-		if (camZooming)
+		// [PE-iOS] ★ 相机缩放：把「回中」与「引擎自动推近」彻底拆开 ★
+		//
+		// 原逻辑只有一条 if(camZooming)：置位后既【推近】又【回中】。
+		// 我们关掉引擎自动推近（PEI_AUTO_CAMZOOM=false）后，若把整个分支一起关掉，
+		// 会连带【回中】也关掉 —— 于是模组自己的 'Add Camera Zoom' 事件
+		// （case 'Add Camera Zoom'，故意保留不挡）把 camHUD.zoom / camera.zoom 推高后
+		// 再也没有任何机制把它拉回来，越推越高 ⇒ 表现为「打歌越打越放大」。
+		// 用户实测：覆盖原版周(tutorial)的模组因 tutorial 那段单独的 tween 拉回 zoom=1
+		// 而被掩盖；【不覆盖原版周】的模组没有这段兜底 ⇒ 放大立刻可见。
+		//
+		// 现逻辑：
+		//   · 回中永远生效 —— camHUD.zoom → 1、FlxG.camera.zoom → defaultCamZoom。
+		//     这是模组事件的「泄压阀」，保证缩放不会累积。
+		//   · 是否允许【引擎自动推近】仍由 PEI_AUTO_CAMZOOM 控制（默认关）。
+		if (camZooming || PEI_CAMZOOM_RECENTER)
 		{
 			FlxG.camera.zoom = FlxMath.lerp(defaultCamZoom, FlxG.camera.zoom, CoolUtil.boundTo(1 - (elapsed * 3.125 * camZoomingDecay * playbackRate), 0, 1));
 			camHUD.zoom = FlxMath.lerp(1, camHUD.zoom, CoolUtil.boundTo(1 - (elapsed * 3.125 * camZoomingDecay * playbackRate), 0, 1));
@@ -3132,6 +3172,52 @@ class PlayState extends MusicBeatState
 		FlxG.watch.addQuick("secShit", curSection);
 		FlxG.watch.addQuick("beatShit", curBeat);
 		FlxG.watch.addQuick("stepShit", curStep);
+
+		// [PE-iOS] ★ 相机缩放诊断（打歌放大排查用）★
+		// 每 60 帧把当前所有和缩放有关的量写进 Documents/pe_ios_cam.txt，
+		// 覆盖写（只看最新一帧，不累积）。用户跑一遍有问题的模组，
+		// 把该文件发回来即可精确定位放大来源：
+		//   · camHUD.zoom  > 1        ⇒ HUD（箭头/血条）被放大
+		//   · camera.zoom  > default  ⇒ 镜头被推近
+		//   · defaultCamZoom 本身很大 ⇒ 模组 stage 的 defaultZoom 就是这么大（正常）
+		//   · scaleMode.scale ≠ 1     ⇒ 屏幕适配在缩放（不是相机的问题）
+		#if ios
+		peDiagFrames++;
+		if (peDiagFrames % 60 == 0)
+		{
+			try
+			{
+				var sm:Dynamic = FlxG.scaleMode;
+				var scX:Float = 1, scY:Float = 1;
+				try { scX = sm.scale.x; scY = sm.scale.y; } catch (e:Dynamic) {}
+				var txt:String = 'song=' + SONG.song
+					+ '\ncurSection=' + curSection
+					+ '\ncamZooming=' + camZooming
+					+ '\ncamZoomingMult=' + camZoomingMult
+					+ '\ncamZoomingDecay=' + camZoomingDecay
+					+ '\n-- zoom --'
+					+ '\nFlxG.camera.zoom=' + FlxG.camera.zoom
+					+ '\ndefaultCamZoom=' + defaultCamZoom
+					+ '\ncamGame.zoom=' + camGame.zoom
+					+ '\ncamHUD.zoom=' + camHUD.zoom
+					+ '\ncamOther.zoom=' + camOther.zoom
+					+ '\n-- size --'
+					+ '\nFlxG.width/height=' + FlxG.width + 'x' + FlxG.height
+					+ '\ninitialWidth/Height=' + FlxG.initialWidth + 'x' + FlxG.initialHeight
+					+ '\ninitialZoom=' + FlxG.initialZoom
+					+ '\ncamGame ' + camGame.width + 'x' + camGame.height
+					+ '\ncamHUD ' + camHUD.width + 'x' + camHUD.height
+					+ '\nscale=' + scX + 'x' + scY
+					+ '\n-- flags --'
+					+ '\nPEI_AUTO_CAMZOOM=' + PEI_AUTO_CAMZOOM
+					+ '\nPEI_CAMZOOM_RECENTER=' + PEI_CAMZOOM_RECENTER
+					+ '\nClientPrefs.camZooms=' + ClientPrefs.camZooms
+					+ '\n';
+				File.saveContent(SUtil.getPath() + 'pe_ios_cam.txt', txt);
+			}
+			catch (e:Dynamic) {}
+		}
+		#end
 
 		// RESET = Quick Game Over Screen
 		if (!ClientPrefs.noReset && controls.RESET && canReset && !inCutscene && startedCountdown && !endingSong)
@@ -4604,16 +4690,25 @@ class PlayState extends MusicBeatState
 
 	function opponentNoteHit(note:Note):Void
 	{
-		// [PE-iOS] ★ 打歌「放大」的真正元凶 ★
-		// 原逻辑：对手每唱一个音符就把 camZooming 置 true，
-		//   于是 3117 行的 lerp 开始生效 —— camHUD.zoom 从 1 向目标偏，
-		//   FlxG.camera.zoom 向 defaultCamZoom 偏 ⇒ 相机 + HUD（箭头/血条）
-		//   一起持续放大，表现为「UI 跟着放大、箭头血条只剩一半」。
+		// [PE-iOS] ★ 相机缩放的「触发源」★
 		//
-		//   这行原本【既没有 ClientPrefs.camZooms 门槛，也不受任何开关控制】，
-		//   所以之前堵另外 4 处都没用 —— 对手一开口就又把它拉回 true 了。
+		// 原逻辑：对手每唱一个音符就 `camZooming = true;`
+		//   ⇒ 主循环里 `if (camZooming)` 的 lerp 开始生效：
+		//        FlxG.camera.zoom → defaultCamZoom （镜头推近）
+		//        camHUD.zoom      → 1            （HUD 收敛回基准）
+		//   注意：这条 lerp 有【双重作用】—— 既是「推近」也是「回中」。
+		//   置 true 后，两边都往各自基准收敛（不是无限放大）。
 		//
-		// 现逻辑：纳入 PEI_AUTO_CAMZOOM（只关引擎自动，模组事件不受影响）。
+		// 用户实测 bug（不覆盖原版周的模组打歌越打越放大）根因：
+		//   模组的 'Add Camera Zoom' 事件会主动 `zoom += camZoom; camHUD.zoom += hudZoom;`。
+		//   原版靠这条 lerp 当「泄压阀」把值收敛回去。
+		//   我们禁用引擎自动推近时若连带关掉整条 lerp，zoom 就永不收敛 ⇒ 累积放大。
+		//
+		// 现逻辑：
+		//   · PEI_AUTO_CAMZOOM = false ⇒ 不再由 opponentNoteHit 【开启】引擎自动推近
+		//     （即：对手唱歌本身不再引起呼吸式缩放）。
+		//   · 但回中改由独立常量 PEI_CAMZOOM_RECENTER 无条件保证（见主循环），
+		//     所以模组事件的放大依然会被收敛，不会累积。
 		if (Paths.formatToSongPath(SONG.song) != 'tutorial' && PEI_AUTO_CAMZOOM)
 			camZooming = true;
 
