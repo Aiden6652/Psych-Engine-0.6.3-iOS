@@ -138,13 +138,17 @@ class Main extends Sprite
 
 			try
 			{
-				var sc:Float = Math.max(FlxG.width / w, FlxG.height / h);
+				// 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
+				// 之前用 Math.max 是「铺满画布」策略，会把画面放大并裁掉边缘
+				// —— 这正是用户反馈的「视频被放大」的来源之一。
+				// 视频本来就该完整显示，宁可留黑边也不要放大。
+				var sc:Float = Math.min(FlxG.width / w, FlxG.height / h);
 				if (sc <= 0 || sc != sc) sc = 1;
 				Reflect.setProperty(c, 'scaleX', sc);
 				Reflect.setProperty(c, 'scaleY', sc);
 				Reflect.setProperty(c, 'x', (FlxG.width - w * sc) / 2);
 				Reflect.setProperty(c, 'y', (FlxG.height - h * sc) / 2);
-				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> scale=' + sc + '\n');
+				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> scale=' + sc + ' (min/等比完整)\n');
 			}
 			catch (e:Dynamic)
 			{
@@ -162,10 +166,27 @@ class Main extends Sprite
 
 	private function setupGame():Void
 	{
-		// 注意：这里【不再】强制 Video.useTexture=false。
-		// 那是排查「打歌时视频没画面」时的临时手段，代价是每帧多拷一份
-		// 1920x1080 的帧（约 8MB）到内存，容易造成随机掉帧甚至卡死。
-		// 视频现在能正常播放，所以回默认的 GPU 纹理路径。
+		// ==================== [PE-iOS] 视频渲染路径 ====================
+		// 必须走 CPU 位图路径（Video.useTexture = false）：
+		//   hxvlc 默认的 GPU 纹理路径在「多相机」场景（打歌 / 过场 substate）下不出图，
+		//   实测表现就是「有声音、没画面」；而 intro.mp4 挂在单相机的 TitleState 上，
+		//   所以它在 GPU 路径下能正常显示 —— 这也解释了「只有 intro 正常」的现象。
+		//   切到 CPU 位图路径后，过场视频（hxcodec 兼容层 VideoHandler）才能出画面。
+		//
+		// 代价：每帧多拷一份视频帧（1080p 约 8MB）到内存。
+		//   之前担心它造成随机卡顿，但那只是推测（未坐实），而「过场视频没画面」是确定的问题，
+		//   两害相权取其轻 —— 先保证画面能出来。
+		#if (VIDEOS_ALLOWED && ios)
+		try
+		{
+			hxvlc.openfl.Video.useTexture = false;
+			trace('[PE-iOS] 视频渲染：已切换为 CPU 位图路径 (Video.useTexture=false)');
+		}
+		catch (e:Dynamic)
+		{
+			trace('[PE-iOS] 切换视频渲染路径失败（已忽略）: ' + e);
+		}
+		#end
 
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
