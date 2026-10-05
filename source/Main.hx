@@ -75,14 +75,13 @@ class Main extends Sprite
 	static inline var PEI_USE_GPU_TEXTURE_PATH:Bool = true;
 
 	/**
-	 * [PE-iOS] 是否把视频缩放到「完整放得下」（不放大、不裁切）。
+	 * [PE-iOS] 视频缩放到「完整放得下」还是「铺满」——【已废弃，仅作历史保留】。
 	 *
-	 * true  = Math.min → 等比完整显示，留黑边（推荐，视频本来就该完整显示）
-	 * false = Math.max → 铺满画布，会放大并裁掉边缘
-	 *
-	 * 注：VideoHandler.hx（hxcodec 兼容层）里已固定用 Math.min，
-	 *   本开关只影响 Main.hx 的 scaleVideoBitmaps() 这条兜底路径。
+	 * 原本它控制 Main.hx 兜底扫描的缩放策略。该扫描的缩放/居中逻辑已【全部删除】
+	 * （见 ensureVideoBitmapVisible() 顶部说明：缩放归 VideoHandler / TitleState 管），
+	 * 所以本开关**当前不起任何作用**。保留它只是为了少改一处、便于回溯。
 	 */
+	@:deprecated
 	static inline var PEI_VIDEO_FIT_INSIDE:Bool = true;
 
 	// ==================== [PE-iOS] 画布定义 ====================
@@ -136,33 +135,31 @@ class Main extends Sprite
 		setupGame();
 	}
 
-	// ==================== [PE-iOS] 视频原始 Bitmap 直显（视频画面兜底）====================
-	// 来源：35a1af5「视频显示兜底 —— 直接显示 hxvlc 内部的原始 Bitmap」。
+	// ==================== [PE-iOS] 视频 Bitmap 可见性兜底（只做这一件事）====================
 	//
-	// 原理：hxvlc 把视频帧写进一个 openfl.display.Bitmap，addChild 到 FlxG.game 上，
-	//   但【默认 visible=false】，正常靠 FlxSprite 从它的 bitmapData 中转显示。
-	//   当「中转链路」（FlxSprite → 相机 → SubState）在过场场景下失效时，
-	//   画面就出不来 ⇒ 有声音、没画面。
+	// 【历史教训 —— 别再往这里加缩放/坐标逻辑】
+	//   35a1af5 曾在这里「顺便」做等比缩放 + 居中，后续版本又叠加了
+	//   「按父容器宽高重新算”——结果是每 12 帧把 VideoHandler / TitleState
+	//   辛苦算好的 scale 与坐标全部推翻一次，两套逻辑互相打架，表现为：
+	//     · 视频「一直放大」（父容器 FlxG.game 已含 RatioScaleMode 的缩放，
+	//       再乘一次 ⇒ 缩放叠缩放）
+	//     · 视频「偏右 / 右边被切」（坐标系错配）
+	//     · 播放结束「卡住」 （属性被反复改写，onEndReached 链路受扰）
 	//
-	// 兜底做法：每若干帧扫一次 FlxG.game 的直接子节点，找到名字含 "Video" 的对象，
-	//   一旦它的 bitmapData 拿到真实尺寸，就：
-	//     visible = true  ← ★ 关键，不设这个则永远不显示
-	//     alpha   = 1
-	//     等比缩放 + 居中到 FlxG 逻辑区域
-	//   ⇒ 由 OpenFL 的 Bitmap 直接绘制（libVLC 官方示例即此做法），
-	//     彻底绕开 FlxSprite / 相机 / SubState 那一整套。
+	// 【现在的职责边界】
+	//   本函数只负责把 hxvlc 内部那个 Bitmap 设为可见。**不碰 scale、不碰 x/y。**
+	//   缩放与居中一律由 VideoHandler.hx / TitleState.hx（官方正规路径）负责，
+	//   它们自己用所属相机的视口算，本来就正确。
 	//
-	// ⚠ 教训：bc1e1b3 曾以「疑似启动崩溃」为由回退过这套扫描，
-	//   回退后过场视频就退化成「只有声音」。若将来又出问题，
-	//   注意保留 visible=true 这一句 —— 缺了它就等于没做。
-	private function scaleVideoBitmaps():Void
+	//   为什么还需要 visible=true：hxvlc 把帧写进 openfl.display.Bitmap 并
+	//   addChild 到 FlxG.game，但【默认 visible=false】，正常靠 FlxSprite
+	//   从它的 bitmapData 中转显示；当该中转链路在过场场景失效时就会
+	//   有声音没画面。设一次 visible 即可，无需每帧重复。
+	private function ensureVideoBitmapVisible():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
 		var g = FlxG.game;
 		if (g == null) return;
-
-		var report:StringBuf = null;
-		var found:Int = 0;
 
 		for (i in 0...g.numChildren)
 		{
@@ -173,99 +170,12 @@ class Main extends Sprite
 			try { cn = Type.getClassName(Type.getClass(c)); } catch (e:Dynamic) {}
 			if (cn == null || cn.indexOf('Video') < 0) continue;
 
-			var w:Float = 0;
-			var h:Float = 0;
 			try
 			{
-				var bmd:Dynamic = Reflect.getProperty(c, 'bitmapData');
-				if (bmd != null)
-				{
-					w = Reflect.getProperty(bmd, 'width');
-					h = Reflect.getProperty(bmd, 'height');
-				}
+				if (Reflect.getProperty(c, 'visible') != true)
+					Reflect.setProperty(c, 'visible', true);
 			}
 			catch (e:Dynamic) {}
-
-			// 只有真正拿到帧的才处理（否则无视频时每帧都白跑）
-			if (w < 2 || h < 2) continue;
-
-			found++;
-			if (report == null) report = new StringBuf();
-
-			try
-			{
-				// ★★★ 关键：必须把 hxvlc 内部那个 Video Bitmap 设为可见！ ★★★
-				//   hxvlc 的实现是：视频帧写进一个 openfl.display.Bitmap，
-				//   它被 addChild 到 FlxG.game 上，但【默认 visible = false】
-				//   （正常的显示路径是靠 FlxSprite 从它的 bitmapData 里「中转」出来）。
-				//
-				//   所以：只改 scale / 位置是不够的 —— 不设 visible=true，
-				//   它永远不参与绘制，表现就是「有声音、没画面」。
-				//   这正是 35a1af5 能做到「有画面」、而后来版本丢了这个设置、
-				//   退化成「只有声音」的直接原因。
-				Reflect.setProperty(c, 'visible', true);
-				Reflect.setProperty(c, 'alpha', 1);
-
-				// 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
-				// 之前用 Math.max 是「铺满画布」策略，会把画面放大并裁掉边缘
-				// —— 这正是用户反馈的「视频被放大」的来源。
-				// 视频本来就该完整显示，宁可留黑边也不要放大。
-				var sc:Float = PEI_VIDEO_FIT_INSIDE
-					? Math.min(FlxG.width / w, FlxG.height / h)
-					: Math.max(FlxG.width / w, FlxG.height / h);
-				if (sc <= 0 || sc != sc) sc = 1;
-
-				// [PE-iOS] 水平居中要按【父容器实际宽度】来算，不能用 FlxG.width。
-				//   原因：这个 Bitmap 是挂在 FlxG.game 上、随它一起被缩放的。
-				//   FlxG.game 被 RatioScaleMode 处理过（scale + 居中偏移），
-				//   子节点坐标要按父容器的坐标系填，否则会整体偏移。
-				//   之前直接用 FlxG.width(1280) 居中 ⇒ 若父容器实际宽度不是 1280，
-				//   视频就会整体偏右/偏左 ⇒ 正是「太靠右、右边被切」的原因。
-				var parentW:Float = FlxG.width;
-				var parentH:Float = FlxG.height;
-				try
-				{
-					var p:Dynamic = Reflect.getProperty(c, 'parent');
-					if (p != null)
-					{
-						var pw:Dynamic = Reflect.getProperty(p, 'width');
-						var ph:Dynamic = Reflect.getProperty(p, 'height');
-						if (pw != null && pw > 1) parentW = pw;
-						if (ph != null && ph > 1) parentH = ph;
-					}
-				}
-				catch (e:Dynamic) {}
-
-				// 用父容器宽高重新算缩放与居中（父容器比例与画布不一致时也能正确居中）
-				sc = PEI_VIDEO_FIT_INSIDE
-					? Math.min(parentW / w, parentH / h)
-					: Math.max(parentW / w, parentH / h);
-				if (sc <= 0 || sc != sc) sc = 1;
-
-				var posX:Float = (parentW - w * sc) / 2;
-				var posY:Float = (parentH - h * sc) / 2;
-
-				Reflect.setProperty(c, 'scaleX', sc);
-				Reflect.setProperty(c, 'scaleY', sc);
-				Reflect.setProperty(c, 'x', posX);
-				Reflect.setProperty(c, 'y', posY);
-				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h
-					+ ' parent=' + parentW + 'x' + parentH
-					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
-					+ ' -> visible=true scale=' + sc
-					+ ' pos=' + posX + ',' + posY
-					+ (PEI_VIDEO_FIT_INSIDE ? ' (min/等比完整)' : ' (max/铺满)') + '\n');
-			}
-			catch (e:Dynamic)
-			{
-				if (report != null) report.add('[' + i + '] ' + cn + ' 设置失败: ' + e + '\n');
-			}
-		}
-
-		// 没有视频时不写文件（也减少磁盘 IO）
-		if (found > 0 && report != null)
-		{
-			try { File.saveContent(SUtil.getPath() + 'pe_ios_videobitmap.txt', report.toString()); } catch (e:Dynamic) {}
 		}
 		#end
 	}
@@ -408,12 +318,14 @@ class Main extends Sprite
 		Lib.current.stage.align = "tl";
 		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
 
-		// 视频 Bitmap 尺寸纠正（无视频时内部会直接跳过，不产生开销）
+		// [PE-iOS] 视频 Bitmap 可见性兜底：只把 hxvlc 内部 Bitmap 设为可见，
+		//   不做缩放/位移（缩放与居中归 VideoHandler / TitleState 负责）。
+		//   有视频时才实际生效，无视频时循环空转，开销可忽略。
 		Lib.current.stage.addEventListener(Event.ENTER_FRAME, function(e:Event):Void
 		{
 			scanFrames++;
 			if (scanFrames % 12 == 0)
-				scaleVideoBitmaps();
+				ensureVideoBitmapVisible();
 		});
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);

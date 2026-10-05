@@ -511,23 +511,17 @@ class TitleState extends MusicBeatState
 				// [PE-iOS] ★ 修「片头视频太靠右 / 右边被切」★
 				// 原写法两处问题：
 				//   1) Math.max(...) —— 铺满策略，视频被放大到超出屏幕两侧 ⇒ 边缘被裁
-				//      （视觉上「太靠右」，其实是左右都超，右侧更明显）
-				//   2) vs.screenCenter() —— 按 FlxG.width/height 居中，
-				//      没有考虑 RatioScaleMode 的黑边偏移，也不等于本相机视口
-				//      ⇒ 整体偏移
+				//   2) vs.screenCenter() —— 它是按 FlxSprite 的 width/height 与
+				//      FlxG.width/height 算的，但我们刚 setGraphicSize 过、
+				//      offset/hitbox 可能还没同步，居中会算歪。
 				//
-				// 改为：等比缩小到「完整放得下」（Math.min）+ 按相机视口显式居中。
+				// 本 sprite 没有指定 cameras ⇒ 挂在 FlxG.cameras.list[0]（camGame）上。
+				// camGame 的【视口尺寸】恒等于 FlxG.width x FlxG.height（由 scaleMode
+				// 保证），相机自身的 x/y 黑边偏移由 Flixel 在绘制时施加，
+				// 与 sprite 坐标无关。所以这里直接用 FlxG.width/height 作为参照
+				// 就是正确的，不需要去读 cameras[0]。
 				var viewW:Float = FlxG.width;
 				var viewH:Float = FlxG.height;
-				try
-				{
-					if (vs.cameras != null && vs.cameras.length > 0 && vs.cameras[0] != null)
-					{
-						viewW = vs.cameras[0].width;
-						viewH = vs.cameras[0].height;
-					}
-				}
-				catch (e:Dynamic) {}
 
 				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1;
@@ -535,9 +529,11 @@ class TitleState extends MusicBeatState
 				var th:Int = Std.int(Math.max(1, bmd.height * scale));
 				vs.setGraphicSize(tw, th);
 				vs.updateHitbox();
-				// 显式居中（不用 screenCenter，避免它按 FlxG 尺寸算）
-				vs.x = (viewW - tw) / 2;
-				vs.y = (viewH - th) / 2;
+				// ★ 顺序很重要：updateHitbox() 会按 frame 重算 offset/size，
+				//   所以 x/y 必须放在它【之后】设，否则会被覆盖。
+				vs.x = (viewW - vs.width) / 2;
+				vs.y = (viewH - vs.height) / 2;
+				vs.scrollFactor.set(0, 0);
 			});
 			vs.bitmap.onEndReached.add(endIntroVideo);
 		}
@@ -600,15 +596,6 @@ class TitleState extends MusicBeatState
 		{
 			var viewW:Float = FlxG.width;
 			var viewH:Float = FlxG.height;
-			try
-			{
-				if (introSpr.cameras != null && introSpr.cameras.length > 0 && introSpr.cameras[0] != null)
-				{
-					viewW = introSpr.cameras[0].width;
-					viewH = introSpr.cameras[0].height;
-				}
-			}
-			catch (e:Dynamic) {}
 
 			var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 			if (sc <= 0 || sc != sc) sc = 1;
@@ -616,8 +603,9 @@ class TitleState extends MusicBeatState
 			var th:Int = Std.int(Math.max(1, bmd.height * sc));
 			introSpr.setGraphicSize(tw, th);
 			introSpr.updateHitbox();
-			introSpr.x = (viewW - tw) / 2;
-			introSpr.y = (viewH - th) / 2;
+			// x/y 必须在 updateHitbox() 之后设（否则被 offset 重算覆盖）
+			introSpr.x = (viewW - introSpr.width) / 2;
+			introSpr.y = (viewH - introSpr.height) / 2;
 		}
 		if (old != null) old.destroy();
 		#end
@@ -677,10 +665,34 @@ class TitleState extends MusicBeatState
 
 			if (introUsingVideo)
 			{
-				// 真视频：画面与声音都由 hxvlc 负责，播完走 onEndReached → endIntroVideo。
+				// 真视频：画面与声音都由 hxvlc 负责，正常播完走 onEndReached → endIntroVideo。
 				// 这里只处理「点一下跳过」（开场 0.6 秒内不响应，避免误触）。
 				if (introTime > 0.6 && introSkippedByInput())
 					endIntroVideo();
+
+				// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
+				//   实测某些 hxvlc 版本（尤其 useTexture=true 的纹理路径）在 iOS 上
+				//   【不会派发 onEndReached】，导致 introPlaying 永远为 true
+				//   ⇒ 标题页输入被永久屏蔽 ⇒ 「片头播完卡住、进不去打歌界面」。
+				//   兜底策略：记录视频总时长，超过「时长 + 1.5 秒」仍未收到结束事件，
+				//   就主动收尾。（若 onEndReached 正常触发，endIntroVideo 内部有
+				//   `if (!introPlaying) return;` 去重，不会重复执行。）
+				if (introPlaying && introVideo != null)
+				{
+					var dur:Float = 0;
+					try { dur = introVideo.length / 1000.0; } catch (e:Dynamic) { dur = 0; }
+					if (dur > 0 && introTime > dur + 1.5)
+					{
+						trace('[PE-iOS] 片头视频超时兜底收尾（onEndReached 未触发）dur=' + dur);
+						endIntroVideo();
+					}
+					else if (dur <= 0 && introTime > 600)
+					{
+						// 连时长都拿不到（load 异常）——给 10 分钟的理论上限，绝不死锁
+						trace('[PE-iOS] 片头视频时长未知，硬超时兜底收尾');
+						endIntroVideo();
+					}
+				}
 			}
 			else
 			{

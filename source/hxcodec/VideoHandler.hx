@@ -43,6 +43,8 @@ class VideoHandler extends FlxSubState
 	private var started:Bool = false;
 	private var canSkipNow:Bool = false;
 	private var diagFrame:Int = 0;
+	/** [PE-iOS] 已播放秒数，用于「onEndReached 不触发」的超时兜底 */
+	private var playElapsed:Float = 0;
 
 	public function new():Void
 	{
@@ -160,21 +162,10 @@ class VideoHandler extends FlxSubState
 				if (bmd.width < 2 || bmd.height < 2)
 				{
 					diag('[formatSetup] 警告：尺寸过小，按原尺寸显示');
+					// [PE-iOS] 不用 screenCenter（它按 sprite 尺寸算，hitbox 未同步时会歪）。
 					video.updateHitbox();
-					// [PE-iOS] 同样不用 screenCenter（它按 FlxG 尺寸算，会偏）。
-					var tvW:Float = FlxG.width;
-					var tvH:Float = FlxG.height;
-					try
-					{
-						if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
-						{
-							tvW = video.cameras[0].width;
-							tvH = video.cameras[0].height;
-						}
-					}
-					catch (e:Dynamic) {}
-					video.x = (tvW - video.width) / 2;
-					video.y = (tvH - video.height) / 2;
+					video.x = (FlxG.width - video.width) / 2;
+					video.y = (FlxG.height - video.height) / 2;
 					video.scrollFactor.set(0, 0);
 					diagRawBitmap('tiny', video);
 					return;
@@ -187,21 +178,15 @@ class VideoHandler extends FlxSubState
 				//   注意：必须与 Main.hx 的 scaleVideoBitmaps() 保持一致（同为 Math.min）。
 				//
 				// ⚠ 关于居中：不要用 video.screenCenter()！
-				//   它按 FlxG.width/height 居中，但本 sprite 挂在【某个具体相机】上
-				//   （见上面 camera 段落），相机视口未必等于 FlxG 的逻辑尺寸，
-				//   而且 RatioScaleMode 加的黑边偏移也不在其中 ⇒ 会整体偏右。
-				//   改为：用【该相机自己的视口尺寸】算缩放与居中。
+				//   它按 sprite 的 width/height 与 FlxG.width/height 算，
+				//   而 setGraphicSize() 之后 hitbox/offset 可能未同步 ⇒ 算歪。
+				//   这里直接手动算，并且把 x/y 放在 updateHitbox() 【之后】。
+				//
+				//   参照系用 FlxG.width/height：FlxVideoSprite 挂在某个相机上，
+				//   而相机【视口尺寸】恒等于 FlxG.width x FlxG.height（scaleMode 保证），
+				//   相机自身的黑边偏移在绘制时施加，与 sprite 坐标无关。
 				var viewW:Float = FlxG.width;
 				var viewH:Float = FlxG.height;
-				try
-				{
-					if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
-					{
-						viewW = video.cameras[0].width;
-						viewH = video.cameras[0].height;
-					}
-				}
-				catch (e:Dynamic) {}
 
 				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
@@ -209,9 +194,10 @@ class VideoHandler extends FlxSubState
 				var th:Int = Std.int(Math.max(1, bmd.height * scale));
 				video.setGraphicSize(tw, th);
 				video.updateHitbox();
-				// 显式居中到相机视口（不用 screenCenter，避免它按 FlxG 尺寸算）
-				video.x = (viewW - tw) / 2;
-				video.y = (viewH - th) / 2;
+				// ★ 必须在 updateHitbox() 之后设坐标（否则被 offset 重算覆盖）
+				video.x = (viewW - video.width) / 2;
+				video.y = (viewH - video.height) / 2;
+				video.scrollFactor.set(0, 0);
 				video.scrollFactor.set(0, 0);
 				diag('[formatSetup] 居中：view=' + viewW + 'x' + viewH
 					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
@@ -251,6 +237,7 @@ class VideoHandler extends FlxSubState
 		playing = true;
 		started = true;
 		diagFrame = 0;
+		playElapsed = 0;
 
 		new FlxTimer().start(0.001, function(_:FlxTimer)
 		{
@@ -319,6 +306,25 @@ class VideoHandler extends FlxSubState
 			diagFrame++;
 			if (diagFrame == 30 || diagFrame == 120)
 				diagRawBitmap('f' + diagFrame, video);
+
+			// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
+			//   某些 hxvlc 版本在 iOS + useTexture=true 下【不派发 onEndReached】，
+			//   导致 substate 永远不关 ⇒ 「过场播完卡住、进不去打歌界面」。
+			//   这里用「已播放时长 > 视频时长 + 2 秒」做超时兜底。
+			//   （onVideoFinished 内部有 `if (ended) return;` 去重，不会重复收尾。）
+			playElapsed += elapsed;
+			if (video != null)
+			{
+				var dur:Float = 0;
+				try { dur = video.length / 1000.0; } catch (e:Dynamic) { dur = 0; }
+				if ((dur > 0 && playElapsed > dur + 2.0) || (dur <= 0 && playElapsed > 120))
+				{
+					diag('[PE-iOS] 过场视频超时兜底收尾（onEndReached 未触发）dur=' + dur
+						+ ' elapsed=' + playElapsed);
+					onVideoFinished();
+					return;
+				}
+			}
 		}
 
 		if (!started || !playing || !canSkip || !canSkipNow) return;
