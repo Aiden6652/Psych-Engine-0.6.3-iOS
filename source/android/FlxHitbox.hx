@@ -18,13 +18,18 @@ import openfl.display.BitmapData;
  *   会出现「部分列是全高、部分列只有顶部小方块」的错位，手机上很难按。
  *
  * 现在这一版完全用代码画（做法对齐 P-Slice 的 mobile/objects/Hitbox.hx）：
- *   - 每列都是 FlxG.width/4 × 列高 的整块触控区，点哪都触发；
- *   - 每列底部（toporbottom 为 Top 时改为顶部）一条细色带作为视觉提示；
+ *   - 每列都是 FlxG.width/4 × 【整屏高】的触控区，点哪都触发；
+ *   - 每列底部一条细色带作为视觉提示（贴屏幕最底）；
  *   - 按下时整列点亮（透明度取自 ClientPrefs.hitBoxTrans），松开淡出；
  *   - 不再依赖任何 PNG，不会再出现资源缺失 / 贴图错位。
  *
- * 对外接口（buttonLeft/buttonDown/buttonUp/buttonRight/buttonSpace/buttonShift）
- * 与原版完全一致，Controls.setHitBox() 不需要改动。
+ * ⚠ 2026-10-05：已【彻底移除】space / shift 那一行按键。
+ *   原因：原实现在开启 hitBoxSpace / hitBoxShift 时会预留一行（占屏幕高 25%），
+ *   把 4 列压缩成 75% 高，导致列底部色带「悬在半空」而不是贴屏幕最底。
+ *   用户确认不用这两个按键，故整段删除，4 列恒为整屏高，色带恒定贴底。
+ *
+ * 对外接口：原版有 buttonSpace / buttonShift 两个字段，现在恒为 null。
+ *   Controls.setHitBox() 里若引用了它们，请做好 null 判断（本文件已同步更新）。
  */
 class FlxHitbox extends FlxSpriteGroup
 {
@@ -34,8 +39,10 @@ class FlxHitbox extends FlxSpriteGroup
 	public var buttonDown:FlxButton;
 	public var buttonUp:FlxButton;
 	public var buttonRight:FlxButton;
-	public var buttonSpace:FlxButton;
-	public var buttonShift:FlxButton;
+
+	/// 保留字段（恒为 null）——兼容仍引用它们的旧代码，不再实例化。
+	public var buttonSpace:FlxButton = null;
+	public var buttonShift:FlxButton = null;
 
 	public var orgAlpha:Float = 0.75;
 	public var orgAntialiasing:Bool = true;
@@ -45,10 +52,8 @@ class FlxHitbox extends FlxSpriteGroup
 	var barDown:FlxSprite;
 	var barUp:FlxSprite;
 	var barRight:FlxSprite;
-	var barSpace:FlxSprite;
-	var barShift:FlxSprite;
 
-	/// 色带厚度 = 所在区域高度的 3.5%（对齐 P-Slice 的 label 尺寸）
+	/// 色带厚度 = 列高的 3.5%（对齐 P-Slice 的 label 尺寸）
 	static inline var BAR_RATIO:Float = 0.035;
 	/// 色带常驻透明度
 	static inline var BAR_ALPHA:Float = 0.85;
@@ -67,19 +72,14 @@ class FlxHitbox extends FlxSpriteGroup
 		buttonDown = new FlxButton(0, 0);
 		buttonUp = new FlxButton(0, 0);
 		buttonRight = new FlxButton(0, 0);
-		if (ClientPrefs.hitBoxSpace) buttonSpace = new FlxButton(0, 0);
-		if (ClientPrefs.hitBoxShift) buttonShift = new FlxButton(0, 0);
 
 		hitbox = new FlxSpriteGroup();
 		hitbox.scrollFactor.set();
 
-		// 需要 space / shift 时，预留一行（占屏幕高 25%，对齐原版 180/720）
-		var needStrip:Bool = ClientPrefs.hitBoxSpace || ClientPrefs.hitBoxShift;
-		var stripAtTop:Bool = (ClientPrefs.toporbottom == 'Top');
-		var stripH:Float = needStrip ? FlxG.height * 0.25 : 0;
+		// 4 列恒为【整屏高】（不再为 space/shift 让出 25% 高度）
 		var colW:Float = FlxG.width / 4;
-		var colH:Float = FlxG.height - stripH;
-		var colY:Float = (needStrip && stripAtTop) ? stripH : 0;
+		var colH:Float = FlxG.height;
+		var colY:Float = 0;
 
 		// 四列：整块触控区 + 底部色带
 		hitbox.add(add(buttonLeft = createZone(0 * colW, colY, colW, colH, LANE_COLORS[0])));
@@ -87,32 +87,10 @@ class FlxHitbox extends FlxSpriteGroup
 		hitbox.add(add(buttonUp = createZone(2 * colW, colY, colW, colH, LANE_COLORS[2])));
 		hitbox.add(add(buttonRight = createZone(3 * colW, colY, colW, colH, LANE_COLORS[3])));
 
-		barLeft = add(createBar(0 * colW, colY, colW, colH, LANE_COLORS[0], stripAtTop));
-		barDown = add(createBar(1 * colW, colY, colW, colH, LANE_COLORS[1], stripAtTop));
-		barUp = add(createBar(2 * colW, colY, colW, colH, LANE_COLORS[2], stripAtTop));
-		barRight = add(createBar(3 * colW, colY, colW, colH, LANE_COLORS[3], stripAtTop));
-
-		// 可选：space / shift 那一行
-		if (needStrip)
-		{
-			var stripY:Float = stripAtTop ? 0 : (FlxG.height - stripH);
-			var spaceOnLeft:Bool = (ClientPrefs.spacePosition != 'Right');
-
-			if (buttonSpace != null)
-			{
-				var w:Float = ClientPrefs.hitBoxShift ? (FlxG.width * 0.5) : FlxG.width;
-				var x:Float = (ClientPrefs.hitBoxShift && !spaceOnLeft) ? (FlxG.width - w) : 0;
-				hitbox.add(add(buttonSpace = createZone(x, stripY, w, stripH, 0xFFFFD700)));
-				barSpace = add(createBar(x, stripY, w, stripH, 0xFFFFD700, !stripAtTop));
-			}
-			if (buttonShift != null)
-			{
-				var w:Float = ClientPrefs.hitBoxSpace ? (FlxG.width * 0.5) : FlxG.width;
-				var x:Float = (ClientPrefs.hitBoxSpace && spaceOnLeft) ? (FlxG.width - w) : 0;
-				hitbox.add(add(buttonShift = createZone(x, stripY, w, stripH, 0xFFB76BFF)));
-				barShift = add(createBar(x, stripY, w, stripH, 0xFFB76BFF, !stripAtTop));
-			}
-		}
+		barLeft = add(createBar(0 * colW, colY, colW, colH, LANE_COLORS[0], false));
+		barDown = add(createBar(1 * colW, colY, colW, colH, LANE_COLORS[1], false));
+		barUp = add(createBar(2 * colW, colY, colW, colH, LANE_COLORS[2], false));
+		barRight = add(createBar(3 * colW, colY, colW, colH, LANE_COLORS[3], false));
 	}
 
 	/// 透明触控区：整块可点，按下时整块点亮
@@ -146,7 +124,7 @@ class FlxHitbox extends FlxSpriteGroup
 		return button;
 	}
 
-	/// 常驻色带（视觉提示，不参与输入）
+	/// 常驻色带（视觉提示，不参与输入）。atTop 为 true 时贴顶部，否则贴【列底】。
 	function createBar(x:Float, y:Float, w:Float, h:Float, color:FlxColor, atTop:Bool):FlxSprite
 	{
 		var barH:Int = Std.int(Math.max(2, h * BAR_RATIO));
@@ -172,7 +150,5 @@ class FlxHitbox extends FlxSpriteGroup
 		barDown = null;
 		barUp = null;
 		barRight = null;
-		barSpace = null;
-		barShift = null;
 	}
 }
