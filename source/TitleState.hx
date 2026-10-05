@@ -510,8 +510,26 @@ class TitleState extends MusicBeatState
 				var bmd = vs.bitmap.bitmapData;
 				if (bmd == null) return;
 
-				var viewW:Float = FlxG.width;
-				var viewH:Float = FlxG.height;
+				// ★★★ [PE-iOS] 适配基准用【相机视口】，不用 FlxG.width ★★★
+				//   实测发现 FlxG.width/height 在 onFormatSetup 触发时未必是
+				//   1280x720（同一视频两次播放算出 0.667 / 0.782 两个 scale）。
+				//   视频交给相机绘制，用 cam.width/height 做基准天然一致。
+				var cam:flixel.FlxCamera = null;
+				try
+				{
+					if (vs.cameras != null && vs.cameras.length > 0)
+						cam = vs.cameras[0];
+				}
+				catch (e:Dynamic) { cam = null; }
+
+				var viewW:Float = (cam != null) ? cam.width : FlxG.width;
+				var viewH:Float = (cam != null) ? cam.height : FlxG.height;
+				if (viewW <= 0 || viewH <= 0)
+				{
+					viewW = FlxG.width;
+					viewH = FlxG.height;
+				}
+
 				var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (sc <= 0 || sc != sc) sc = 1;
 

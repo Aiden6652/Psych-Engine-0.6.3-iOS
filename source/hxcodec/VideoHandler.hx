@@ -259,8 +259,39 @@ class VideoHandler extends FlxSubState
 				//
 				// ⚠ 也不用 video.screenCenter()：它按 width/height 算，
 				//   而这些值要 updateHitbox() 之后才准。
-				var viewW:Float = FlxG.width;
-				var viewH:Float = FlxG.height;
+				//
+				// ★★★ [PE-iOS] 关键修正：适配基准用【相机视口】，不用 FlxG.width ★★★
+				//
+				//   日志实测发现：同一 bmd(1920x1080) 在不同次播放里算出【不同 scale】
+				//     · 一次 scale=0.6667 (1280x720)  ← FlxG 是 1280x720
+				//     · 一次 scale=0.7823 (1502x845)  ← FlxG 是 1502x845 ?!
+				//   即 `FlxG.width/height` 在 onFormatSetup 触发的那一刻【不是 1280x720】，
+				//   于是按它算出来的尺寸与相机视口不匹配 ⇒ 视频跑偏/出画外 ⇒ 看着像黑屏。
+				//
+				//   而视频是【交给相机绘制】的，真正决定「可视区域」的是相机视口
+				//   `cam.width/height`（FlxCamera.width 取自 FlxG.width，但它是缓存值，
+				//   在 scaleMode 更新后才是最终值）。用相机视口做基准，天然与绘制一致。
+				var cam:flixel.FlxCamera = null;
+				try
+				{
+					if (video.cameras != null && video.cameras.length > 0)
+						cam = video.cameras[0];
+				}
+				catch (e:Dynamic) { cam = null; }
+
+				var viewW:Float = (cam != null) ? cam.width : FlxG.width;
+				var viewH:Float = (cam != null) ? cam.height : FlxG.height;
+				if (viewW <= 0 || viewH <= 0)
+				{
+					viewW = FlxG.width;
+					viewH = FlxG.height;
+				}
+
+				// 诊断：把候选基准全打出来，一眼看出谁在飘。
+				diag('[basis] FlxG=' + FlxG.width + 'x' + FlxG.height
+					+ ' cam=' + (cam == null ? 'null' : cam.width + 'x' + cam.height)
+					+ ' initial=' + FlxG.initialWidth + 'x' + FlxG.initialHeight
+					+ ' → 采用 view=' + viewW + 'x' + viewH);
 
 				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
