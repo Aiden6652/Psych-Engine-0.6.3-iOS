@@ -190,6 +190,18 @@ class Main extends Sprite
 	private function ensureVideoBitmapVisible():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
+		// ★ 若自动兜底已经判断「FlxSprite 正路不通」并打开了内层 Bitmap，
+		//   这里就不能再关它（否则每隔 12 帧反复横跳 ⇒ 画面闪烁）。
+		//   该标记由 VideoHandler 的 autoFallbackTimer 置位。
+		//   用 Reflect 读静态字段，避免与 hxcodec.VideoHandler 的 #if 条件耦合。
+		var fallbackActive:Bool = false;
+		try
+		{
+			fallbackActive = (Reflect.field(hxcodec.VideoHandler, 'PEI_VIDEO_FALLBACK_ACTIVE') == true);
+		}
+		catch (e:Dynamic) { fallbackActive = false; }
+		if (fallbackActive) return;
+
 		var g = FlxG.game;
 		if (g == null) return;
 

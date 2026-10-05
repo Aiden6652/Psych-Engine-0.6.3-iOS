@@ -48,6 +48,15 @@ class VideoHandler extends FlxSubState
 	/** [PE-iOS] 视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知 */
 	private var videoDurSec:Float = 0;
 
+	/**
+	 * [PE-iOS] 自动兜底激活标记。
+	 *
+	 * 默认 false：内层 Bitmap 保持隐藏（正确状态，避免与 FlxSprite 重叠 → 偏右/被裁）。
+	 * 仅当 autoFallbackTimer 判定「FlxSprite 正路确实没出画面」时置 true，
+	 * 此时 Main.hx 的 ensureVideoBitmapVisible() 会停止强行隐藏它（避免反复横跳闪烁）。
+	 */
+	public static var PEI_VIDEO_FALLBACK_ACTIVE:Bool = false;
+
 	public function new():Void
 	{
 		super();
@@ -269,6 +278,14 @@ class VideoHandler extends FlxSubState
 				//     · 父节点 FlxG.game 带黑边偏移（offset.x/offset.y）
 				//   ⇒ 一旦它 visible=true，屏幕就多一个偏右、下边被裁的视频。
 				//   Main.hx 的 ensureVideoBitmapVisible() 每 12 帧纠一次，这里再补一刀。
+				//
+				//   ⚠ 关掉它【不会】导致没画面：Video.hx videoDisplay() 第 1554 行是
+				//       if ((__renderable || forceRendering) && ...)
+				//     而 FlxVideoSprite 构造时设了 forceRendering = true（第 77 行），
+				//     所以即使 __renderable(≈visible) 为 false，帧仍每帧写进 bitmapData
+				//     （第 1570 行 setPixels 无条件执行），FlxSprite 照常显示。
+				//     visible 只影响第 1572 行的 __setRenderDirty()，即「这一层自己重不重绘」。
+				//   —— 若哪天正路真不通，下面的 autoFallbackTimer 会自动把它打开兜底。
 				try { video.bitmap.visible = false; } catch (e:Dynamic) {}
 
 				diag('[formatSetup] 居中：view=' + viewW + 'x' + viewH
@@ -351,6 +368,76 @@ class VideoHandler extends FlxSubState
 		});
 
 		new FlxTimer().start(0.5, function(_:FlxTimer) canSkipNow = true);
+
+		// ★ [PE-iOS] 自动兜底：1.5 秒后检查 FlxSprite 正路到底出没出画面，
+		//   没出画面就自动打开内层 Bitmap（画面会偏右/被裁，但至少不黑屏）。
+		//
+		// ── 为什么需要这个保险 ──────────────────────────────────────────
+		//   我们【主动关掉了】内层 Bitmap，因为它在 visible 时会与 FlxSprite
+		//   视频重叠，造成「偏右 + 右边和下面被裁」。但万一在别的设备上
+		//   FlxSprite 正路真的不通，关掉它就是黑屏。
+		//   这条定时器就是那张安全网：只在「正路确实没出画面」时才退回去。
+		//
+		// ── 判据（多重，任一不满足即认为正路异常）────────────────────────
+		//   1) bitmapData 存在且尺寸 > 1（hxvlc 建帧成功）
+		//   2) FlxSprite.frameWidth > 1（loadGraphic 真的换了帧）
+		//   3) FlxSprite 宽高 > 1（updateHitbox 后有效）
+		//   4) sprite 至少与相机视口有交集（不是被放到屏幕外）
+		//
+		//   正常情况下 1-4 全满足 ⇒ 保持内层 Bitmap 隐藏（画面正确、不重叠）。
+		new FlxTimer().start(1.5, function(_:FlxTimer)
+		{
+			if (!playing || video == null || video.bitmap == null) return;
+
+			var bmdOK:Bool = false;
+			var bmdDesc:String = 'null';
+			var bmd = video.bitmap.bitmapData;
+			if (bmd != null)
+			{
+				bmdDesc = bmd.width + 'x' + bmd.height;
+				bmdOK = (bmd.width > 1 && bmd.height > 1);
+			}
+
+			var fw:Float = 0;
+			try { fw = video.frameWidth; } catch (e:Dynamic) { fw = 0; }
+			var vw:Float = 0;
+			try { vw = video.width; } catch (e:Dynamic) { vw = 0; }
+			var vh:Float = 0;
+			try { vh = video.height; } catch (e:Dynamic) { vh = 0; }
+
+			// 与相机视口求交集（该 sprite 挂在最后那个相机上）
+			var onScreen:Bool = false;
+			try
+			{
+				if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
+				{
+					var cam = video.cameras[0];
+					var visX:Bool = (video.x + vw > cam.x) && (video.x < cam.x + cam.width);
+					var visY:Bool = (video.y + vh > cam.y) && (video.y < cam.y + cam.height);
+					onScreen = visX && visY;
+				}
+			}
+			catch (e:Dynamic) { onScreen = false; }
+
+			var ok:Bool = bmdOK && fw > 1 && vw > 1 && vh > 1 && onScreen;
+
+			diag('[autoFallback] 1.5s 判据: bmd=' + bmdDesc
+				+ ' frameWidth=' + fw + ' size=' + vw + 'x' + vh
+				+ ' onScreen=' + onScreen + ' → 正路' + (ok ? '正常' : '异常'));
+
+			if (!ok)
+			{
+				diag('[autoFallback] ★ FlxSprite 正路异常 → 打开内层 Bitmap 兜底（画面可能偏右/被裁）');
+				try { video.bitmap.visible = true; } catch (e:Dynamic) {}
+				#if (VIDEOS_ALLOWED && ios)
+				hxcodec.VideoHandler.PEI_VIDEO_FALLBACK_ACTIVE = true;
+				#end
+			}
+			else
+			{
+				diag('[autoFallback] ✓ FlxSprite 正路正常 → 保持内层 Bitmap 隐藏（无重叠、不偏右）');
+			}
+		});
 	}
 
 	/** 老模组会调用的跳过接口 */

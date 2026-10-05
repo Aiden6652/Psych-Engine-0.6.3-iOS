@@ -635,6 +635,47 @@ class TitleState extends MusicBeatState
 				try { introVideo.play(); } catch (e:Dynamic) {}
 			}
 		});
+
+		// ★ [PE-iOS] intro 路径同样加自动兜底：1.5 秒后确认 FlxSprite 正路是否出画面。
+		//   判据与 VideoHandler 完全一致（bmd / frameWidth / 尺寸 / 相机视口交集）。
+		//   正常情况下正路通，保持内层 Bitmap 隐藏 ⇒ 不偏右、不重叠。
+		//   万一不通，退回打开内层 Bitmap（画面偏右但至少有画面）。
+		new FlxTimer().start(1.5, function(_:FlxTimer)
+		{
+			if (!introPlaying || introVideo == null || introVideo.bitmap == null) return;
+
+			var bmdOK:Bool = false;
+			var bmd = introVideo.bitmap.bitmapData;
+			if (bmd != null) bmdOK = (bmd.width > 1 && bmd.height > 1);
+
+			var fw:Float = 0;
+			try { fw = introVideo.frameWidth; } catch (e:Dynamic) { fw = 0; }
+			var vw:Float = 0;
+			try { vw = introVideo.width; } catch (e:Dynamic) { vw = 0; }
+			var vh:Float = 0;
+			try { vh = introVideo.height; } catch (e:Dynamic) { vh = 0; }
+
+			var onScreen:Bool = false;
+			try
+			{
+				if (introVideo.cameras != null && introVideo.cameras.length > 0 && introVideo.cameras[0] != null)
+				{
+					var cam = introVideo.cameras[0];
+					onScreen = (introVideo.x + vw > cam.x) && (introVideo.x < cam.x + cam.width)
+						&& (introVideo.y + vh > cam.y) && (introVideo.y < cam.y + cam.height);
+				}
+			}
+			catch (e:Dynamic) { onScreen = false; }
+
+			var ok:Bool = bmdOK && fw > 1 && vw > 1 && vh > 1 && onScreen;
+			trace('[PE-iOS] intro 兜底判据: bmd=' + (bmd == null ? 'null' : bmd.width + 'x' + bmd.height)
+				+ ' frameWidth=' + fw + ' size=' + vw + 'x' + vh
+				+ ' onScreen=' + onScreen + ' → 正路' + (ok ? '正常' : '异常'));
+			if (!ok)
+			{
+				try { introVideo.bitmap.visible = true; } catch (e:Dynamic) {}
+			}
+		});
 		#end
 	}
 
