@@ -75,32 +75,33 @@ class Main extends Sprite
 	static inline var PEI_USE_GPU_TEXTURE_PATH:Bool = true;
 
 	/**
-	 * [PE-iOS] ★ 视频显隐兜底：是否把 hxvlc 内部那个原始 Bitmap 强制设为 visible。
+	 * [PE-iOS] ~~视频显隐兜底~~ —— 【已废除，保留此注释作为结论存档】
 	 *
-	 * ── 背景 ──────────────────────────────────────────────────────────
+	 * ── 曾经的设想 ────────────────────────────────────────────────────
 	 * hxvlc 把视频帧写进一个 `openfl.display.Bitmap`，并 addChild 到 `FlxG.game`，
-	 * 但它【默认 visible=false】—— 正常的显示路径是让 `FlxSprite` 从它的
+	 * 但它【默认 visible=false】—— 正常显示路径是让 `FlxSprite` 从它的
 	 * `bitmapData` 里「中转」出来，通过相机绘制。
-	 *
 	 * 早期某些版本「有声音、没画面」，当时的兜底就是把它强行 visible=true，
 	 * 于是由 OpenFL 直接绘制这个 Bitmap（libVLC 官方示例即此做法）。
 	 *
-	 * ── 但这么做有个严重副作用（「视频偏右」的真凶）──────────────────
+	 * ── 为什么【彻底废除】──────────────────────────────────────────────
 	 * 这个 Bitmap 是 `FlxG.game` 的【直接子节点】，而 `FlxG.game` 会被
-	 * `BaseScaleMode.updateGamePosition()` 平移：
-	 *     FlxG.game.x = offset.x = Math.ceil((deviceSize.x - gameSize.x) * 0.5)
-	 * 即它承载着「黑边偏移」。Bitmap 跟着一起右移 ⇒ 屏幕上那个视频偏右。
+	 * `BaseScaleMode.updateGamePosition()` 平移与缩放：
+	 *     FlxG.game.x = offset.x = ceil((deviceSize.x - gameSize.x) * 0.5)
+	 *     FlxG.game.y = offset.y
+	 * 同时它的 width/height 【自动跟随 bitmapData】（libVLC 逐帧重算，
+	 * 1502x845 → 1920x1080），完全不受 flixel 相机与 FlxSprite.scale 管辖。
+	 * ⇒ 把它 visible=true，屏幕上就多出【第二个视频】：偏右、下边被裁、不居中。
+	 * 这正是「视频偏右 / 右边和下面被裁 / 下边贴紧」的最终根因。
 	 *
-	 * 与此同时，`FlxSprite` 正路（挂在相机上）坐标系是独立的、居中的，
-	 * 于是屏幕上会出现【两个视频叠加】：一个正确居中、一个偏右。
-	 * 看起来就是「偏右 / 像有两层影子」。
+	 * ── 现在的做法 ────────────────────────────────────────────────────
+	 * 见 `ensureVideoBitmapVisible()` —— 函数名保留（历史原因），
+	 * 但行为【反转】：每 12 帧强制把该 Bitmap 置为 visible=false，
+	 * 作为保险，确保显示视频永远只走 FlxSprite 一条路。
 	 *
-	 * ── 结论 ──────────────────────────────────────────────────────────
-	 * **正路已经能出画面时，这个兜底必须【关闭】**（默认 false）。
-	 * 若关掉后出现「有声音没画面」（说明正路在你那台设备上确实不通），
-	 * 再改回 true —— 那时画面会偏右，但至少能看，属于两害相权。
+	 * ⚠ 不要再引入「打开它」的分支：正路（FlxVideoSprite + forceRendering）
+	 *   在 hxvlc 1.9.3 上一定会出画面，打开它只会引入重叠与偏移。
 	 */
-	static inline var PEI_VIDEO_VISIBLE_FALLBACK:Bool = false;
 
 	// ==================== [PE-iOS] 画布定义 ====================
 	// width/height 恒为 1280x720（16:9）—— 这是全局唯一真相源：
@@ -153,15 +154,34 @@ class Main extends Sprite
 		setupGame();
 	}
 
-	// ==================== [PE-iOS] 视频 Bitmap 显隐兜底（默认关闭）====================
+	// ==================== [PE-iOS] 视频 Bitmap 强制隐藏 ====================
 	//
-	// 【为什么默认关闭 —— 「视频偏右」的真凶】
-	//   这个 Bitmap 是 `FlxG.game` 的【直接子节点】，而 `FlxG.game` 会被
-	//   `BaseScaleMode.updateGamePosition()` 平移：
-	//       FlxG.game.x = offset.x = ceil((deviceSize.x - gameSize.x) * 0.5)
-	//   即它带着「黑边偏移」。所以把它 visible=true 之后，它绘制出来必然偏右。
-	//   而 `FlxSprite` 正路（挂相机）坐标系独立且居中 ⇒ 两个视频叠加，
-	//   看到的就是「偏右」。详见 PEI_VIDEO_VISIBLE_FALLBACK 的注释。
+	// 【「偏右 + 右边被裁 + 下面被裁」的真凶 —— 已定案】
+	//
+	//   hxvlc 1.9.3 的 `FlxVideoSprite` 构造时做了两件事（FlxVideoSprite.hx 第 95-96 行）：
+	//       bitmap.visible = false;          // ← 默认隐藏
+	//       FlxG.game.addChild(bitmap);      // ← 挂到 FlxG.game 上
+	//
+	//   而 `hxvlc.openfl.Video`（= bitmap）继承自 openfl.display.Bitmap：
+	//     · 它的 width/height 【自动跟随 bitmapData】（Video.hx videoFormatSetup
+	//       里每次格式变化都 new/dispose 一个 textureWidth×textureHeight 的 BitmapData）
+	//     · 它【不受】flixel 相机与 FlxSprite.scale 的管辖
+	//     · 它挂的父节点 `FlxG.game` 会被 BaseScaleMode 平移/缩放：
+	//           FlxG.game.x = offset.x;  FlxG.game.y = offset.y;
+	//           FlxG.game.scaleX = gameSize.x / (FlxG.width * initialZoom)
+	//
+	//   ⇒ 一旦有人把 bitmap.visible 打开，屏幕上就会出现【第二个视频】：
+	//     尺寸按 bitmapData 原始分辨率、位置带黑边偏移、缩放是 FlxGame 全局缩放。
+	//     它盖在正确的 FlxSprite 视频之上，看起来就是
+	//     「偏右 / 右边和下面被裁 / 不居中 / 下边贴紧」。
+	//     而 `[raw:]` 日志里 scale 一路递增（0.696→0.759→0.825）正是
+	//     bitmapData 因 libVLC 逐帧重算尺寸（1502x845 → 1920x1080）导致的表现，
+	//     与我们在 FlxSprite 层设的 scale 无关。
+	//
+	//   ⇒ 结论：**这个 Bitmap 任何时候都必须保持 visible=false**（hxvlc 的初衷），
+	//     显示视频【只走 FlxSprite 一条路】。本函数的职责因此从「打开它」
+	//     反转成「强制关掉它」，作为一道保险：万一某次格式重设把它打开（或某版本
+	//     hxvlc 改变了默认值），这里每 12 帧纠回来一次。
 	//
 	// 【历史教训 —— 别再往这里加缩放/坐标逻辑】
 	//   35a1af5 曾在这里「顺便」做等比缩放 + 居中，后续又叠加「按父容器重算」，
@@ -170,7 +190,6 @@ class Main extends Sprite
 	private function ensureVideoBitmapVisible():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
-		if (!PEI_VIDEO_VISIBLE_FALLBACK) return;   // ★ 默认关闭：走正路
 		var g = FlxG.game;
 		if (g == null) return;
 
@@ -183,10 +202,14 @@ class Main extends Sprite
 			try { cn = Type.getClassName(Type.getClass(c)); } catch (e:Dynamic) {}
 			if (cn == null || cn.indexOf('Video') < 0) continue;
 
+			// ★ 强制隐藏：这才是正确状态（hxvlc 默认就是 hidden，见类注释）。
 			try
 			{
-				if (Reflect.getProperty(c, 'visible') != true)
-					Reflect.setProperty(c, 'visible', true);
+				if (Reflect.getProperty(c, 'visible') != false)
+				{
+					Reflect.setProperty(c, 'visible', false);
+					trace('[PE-iOS] 已强制隐藏 hxvlc 原始 Bitmap（防它与 FlxSprite 视频重叠）');
+				}
 			}
 			catch (e:Dynamic) {}
 		}

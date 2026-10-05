@@ -540,6 +540,12 @@ class TitleState extends MusicBeatState
 				vs.y = (viewH - vs.height) / 2;
 				vs.scrollFactor.set(0, 0);
 
+				// ★ [PE-iOS] 强制隐藏 hxvlc 内层原始 Bitmap。
+				//   它被 addChild 到 FlxG.game 上，尺寸自动跟随 bitmapData、
+				//   不受相机/FlxSprite.scale 管辖，会带着黑边偏移叠在画面上，
+				//   表现为【偏右 / 右边和下面被裁】。显示视频只走 FlxSprite 一条路。
+				try { vs.bitmap.visible = false; } catch (e:Dynamic) {}
+
 				// [PE-iOS] 诊断：把整条坐标链打出来，定位「偏右 / 被裁」。
 				try
 				{

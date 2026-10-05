@@ -228,25 +228,23 @@ class VideoHandler extends FlxSubState
 					return;
 				}
 
-				// [PE-iOS] 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
-				//   之前用 Math.max 是「铺满画布」策略 —— 会把视频放大并裁掉边缘。
-				//   视频本来就该完整显示，宁可留黑边也不要放大。
+				// [PE-iOS] 缩放策略：按「完整放得下」等比缩放（Math.min），不放大不裁切。
 				//
-				// ★★★ 关键：不要用 video.setGraphicSize() ★★★
+				// ── 真正会「偏右 / 右边和下面被裁」的地方不在这里 ──────────────
+				//   已经定案：那是 hxvlc 内部那个原始 Bitmap（挂在 FlxG.game 上、
+				//   尺寸自动跟随 bitmapData、不受相机管辖）被打开 visible 造成的，
+				//   修复在 Main.hx 的 ensureVideoBitmapVisible()（强制隐藏它）。
+				//   本节代码只负责 FlxSprite 这条正路的缩放。
 				//
+				// ★ 不要用 video.setGraphicSize() ★
 				//   FlxSprite.setGraphicSize(W,H) 内部是：
-				//       scale.x = W / frameWidth;
-				//       scale.y = H / frameHeight;
-				//   —— 它【除以当前 frame 尺寸】来反推缩放比例。
-				//
-				//   FlxVideoSprite 的帧是由 hxvlc 在【它自己的】onFormatSetup 回调里
-				//   通过 loadGraphic(FlxGraphic.fromBitmapData(...)) 更新的。我们的回调
-				//   挂在同一个事件上，执行顺序取决于 add 顺序。若我们的先跑，
+				//       scale.x = W / frameWidth;   scale.y = H / frameHeight;
+				//   —— 它【除以当前 frame 尺寸】反推缩放比例。
+				//   FlxVideoSprite 的帧由 hxvlc 在【它自己的】onFormatSetup 回调里
+				//   通过 loadGraphic(FlxGraphic.fromBitmapData(...)) 更新。我们的回调
+				//   挂在同一事件上，执行顺序取决于 add 顺序。若我们的先跑，
 				//   frameWidth 还是构造时 makeGraphic(1,1) 留下的 1：
 				//       scale.x = (1920 * 0.667) / 1 = 1280   ← 灾难性放大
-				//   就算 frame 更新过，只要与 bmd 不同步，scale 就是错的
-				//   ⇒ 视频被放大、锚点在左上角 ⇒ 【右边和下面超出被裁】。
-				//
 				//   因此：直接设 scale（明确的缩放因子，与 frameWidth 无关），
 				//   再 updateHitbox() 同步 width/height/offset。
 				//
@@ -262,6 +260,17 @@ class VideoHandler extends FlxSubState
 				video.x = (viewW - video.width) / 2;
 				video.y = (viewH - video.height) / 2;
 				video.scrollFactor.set(0, 0);
+
+				// ★ [PE-iOS] 强制隐藏 hxvlc 内层原始 Bitmap。
+				//   它被 FlxVideoSprite 构造时 addChild 到 FlxG.game 上
+				//   （FlxVideoSprite.hx 第 95-96 行，默认 visible=false）：
+				//     · 尺寸自动跟随 bitmapData（libVLC 逐帧重算 1502x845→1920x1080）
+				//     · 不受 flixel 相机与 FlxSprite.scale 管辖
+				//     · 父节点 FlxG.game 带黑边偏移（offset.x/offset.y）
+				//   ⇒ 一旦它 visible=true，屏幕就多一个偏右、下边被裁的视频。
+				//   Main.hx 的 ensureVideoBitmapVisible() 每 12 帧纠一次，这里再补一刀。
+				try { video.bitmap.visible = false; } catch (e:Dynamic) {}
+
 				diag('[formatSetup] 居中：view=' + viewW + 'x' + viewH
 					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
 					+ ' xy=' + video.x + ',' + video.y);
