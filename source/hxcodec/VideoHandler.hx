@@ -126,32 +126,37 @@ class VideoHandler extends FlxSubState
 		try
 		{
 			var s:String = '[coord:' + tag + ']'
-				+ ' spr(x=' + v.x + ',y=' + v.y + ',w=' + v.width + ',h=' + v.height
-				+ ',sx=' + v.scaleX + ',sy=' + v.scaleY
-				+ ',ox=' + v.offset.x + ',oy=' + v.offset.y + ')'
+				+ ' spr(x=' + Std.string(v.x) + ',y=' + Std.string(v.y)
+				+ ',w=' + Std.string(v.width) + ',h=' + Std.string(v.height)
+				+ ',sx=' + Std.string(v.scale.x) + ',sy=' + Std.string(v.scale.y)
+				+ ',ox=' + Std.string(v.offset.x) + ',oy=' + Std.string(v.offset.y) + ')'
 				+ ' FlxG(' + FlxG.width + 'x' + FlxG.height + ')';
 
 			var g:Dynamic = FlxG.game;
 			if (g != null)
 			{
-				s += ' game(x=' + Reflect.getProperty(g, 'x') + ',y=' + Reflect.getProperty(g, 'y')
-					+ ',sx=' + Reflect.getProperty(g, 'scaleX')
-					+ ',sy=' + Reflect.getProperty(g, 'scaleY') + ')';
+				s += ' game(x=' + Std.string(Reflect.getProperty(g, 'x'))
+					+ ',y=' + Std.string(Reflect.getProperty(g, 'y'))
+					+ ',sx=' + Std.string(Reflect.getProperty(g, 'scaleX'))
+					+ ',sy=' + Std.string(Reflect.getProperty(g, 'scaleY')) + ')';
 			}
 
 			if (v.cameras != null && v.cameras.length > 0 && v.cameras[0] != null)
 			{
 				var c = v.cameras[0];
-				s += ' cam(x=' + c.x + ',y=' + c.y + ',w=' + c.width + ',h=' + c.height
-					+ ',zoom=' + c.zoom + ',scroll=' + c.scroll.x + ',' + c.scroll.y + ')';
+				s += ' cam(' + Std.string(c.x) + ',' + Std.string(c.y)
+					+ ' ' + c.width + 'x' + c.height
+					+ ' z=' + Std.string(c.zoom)
+					+ ' sc=' + Std.string(c.scroll.x) + ',' + Std.string(c.scroll.y) + ')';
 			}
 			else s += ' cam(无)';
 
 			if (v.bitmap != null)
 			{
 				var b = v.bitmap;
-				s += ' bmp(x=' + b.x + ',y=' + b.y + ',w=' + b.width + ',h=' + b.height
-					+ ',sx=' + b.scaleX + ',sy=' + b.scaleY + ',vis=' + b.visible + ')';
+				s += ' bmp(' + Std.string(b.x) + ',' + Std.string(b.y)
+					+ ' ' + Std.string(b.width) + 'x' + Std.string(b.height)
+					+ ' s=' + Std.string(b.scaleX) + ' vis=' + b.visible + ')';
 			}
 
 			diag(s);
