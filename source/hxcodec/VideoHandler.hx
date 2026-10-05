@@ -75,6 +75,15 @@ class VideoHandler extends FlxSprite
 	private var playElapsed:Float = 0;
 	/** [PE-iOS] 视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知 */
 	private var videoDurSec:Float = 0;
+
+	/**
+	 * [PE-iOS] 过场视频的「最小播放时长」门槛（秒）。
+	 *
+	 * 与 TitleState.MIN_INTRO_SECONDS 同一套逻辑：iOS 上 hxvlc 可能过早
+	 * 派发 onEndReached / onLengthChanged，导致过场刚播 1 秒就被收尾。
+	 * 低于此值的一律视为误报。
+	 */
+	static inline var MIN_PLAY_SECONDS:Float = 2.5;
 	/** [PE-iOS] 视频 sprite 被挂到了哪个 state 上（收尾时要从它身上摘掉） */
 	private var hostState:flixel.FlxState = null;
 
@@ -414,46 +423,36 @@ class VideoHandler extends FlxSprite
 				// ⚠ 也不用 video.screenCenter()：它按 width/height 算，
 				//   而这些值要 updateHitbox() 之后才准。
 				//
-				// ★★★ [PE-iOS] 关键修正：适配基准用【相机视口】，不用 FlxG.width ★★★
+				// ★★★ [PE-iOS] 适配基准：用【游戏窗口逻辑尺寸 FlxG.width/height】 ★★★
 				//
-				//   日志实测发现：同一 bmd(1920x1080) 在不同次播放里算出【不同 scale】
-				//     · 一次 scale=0.6667 (1280x720)  ← FlxG 是 1280x720
-				//     · 一次 scale=0.7823 (1502x845)  ← FlxG 是 1502x845 ?!
-				//   即 `FlxG.width/height` 在 onFormatSetup 触发的那一刻【不是 1280x720】，
-				//   于是按它算出来的尺寸与相机视口不匹配 ⇒ 视频跑偏/出画外 ⇒ 看着像黑屏。
+				//   ── 为什么从「相机视口」改回 FlxG ────────────────────────────
+				//   用户实测：「画面出来了，但没铺满整个游戏窗口。」
+				//   说明视频只填满了【相机视口那一条】，而不是整个 game 面。
 				//
-				//   而视频是【交给相机绘制】的，真正决定「可视区域」的是相机视口
-				//   `cam.width/height`（FlxCamera.width 取自 FlxG.width，但它是缓存值，
-				//   在 scaleMode 更新后才是最终值）。用相机视口做基准，天然与绘制一致。
+				//   本项目视口结构（用户实测数据）：
+				//       stage    = 1024x768   （设备横屏 4:3）
+				//       canvas   = 1280x720   （FlxG.width/height，游戏逻辑尺寸）
+				//       gameSize = 1024x576   （RatioScaleMode(false) 缩放后的显示区）
+				//       offset.y = 96         （上下黑边）
+				//   视频 sprite 由相机绘制，最终会被【拉伸到整个 game 面】显示。
+				//   所以视频自己的逻辑尺寸必须是【游戏逻辑尺寸 1280x720】，
+				//   而不是相机视口尺寸 —— 后者小于前者时就会「没铺满」。
 				//
-				//   ⚠ 获取顺序（与 intro 对齐）：
-				//     1) video.cameras[0]（若 flixel 已给它挂上默认相机）
-				//     2) 否则取 FlxG.cameras.list[0] —— 通常就是 camGame
-				//     （不再取最后一个！那正是「交给错误相机 → 黑屏」的原因，见上文）
-				var cam:flixel.FlxCamera = null;
-				try
-				{
-					if (video.cameras != null && video.cameras.length > 0)
-						cam = video.cameras[0];
-				}
-				catch (e:Dynamic) { cam = null; }
-
-				if (cam == null)
-				{
-					try
-					{
-						var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
-						if (cams != null && cams.length > 0) cam = cams[0];
-					}
-					catch (e:Dynamic) { cam = null; }
-				}
-
-				var viewW:Float = (cam != null) ? cam.width : FlxG.width;
-				var viewH:Float = (cam != null) ? cam.height : FlxG.height;
+				//   ⚠ 历史教训：早先改成相机视口，是因为看到「同一 bmd 两次算出
+				//     0.667 / 0.782 两个 scale」，怀疑 FlxG.width 不稳。
+				//     现在 update() 里已经有【每帧矫正】，会持续把 scale 拉回正确值，
+				//     所以这里可以放心用 FlxG.width/height（1280x720 是确定的）。
+				var viewW:Float = FlxG.width;
+				var viewH:Float = FlxG.height;
 				if (viewW <= 0 || viewH <= 0)
 				{
-					viewW = FlxG.width;
-					viewH = FlxG.height;
+					viewW = FlxG.initialWidth;
+					viewH = FlxG.initialHeight;
+				}
+				if (viewW <= 0 || viewH <= 0)
+				{
+					viewW = 1280;
+					viewH = 720;
 				}
 
 				// 诊断：把候选基准全打出来，一眼看出谁在飘。
@@ -499,7 +498,31 @@ class VideoHandler extends FlxSprite
 				diagRawBitmap('afterFormat', video);
 				diagCoords('afterFormat', video);
 			});
-			video.bitmap.onEndReached.add(onVideoFinished);
+			// ★★★ [PE-iOS] onEndReached 必须加「最小播放时长」守卫 ★★★
+			//
+			//   现象：过场动画只播 1 秒就被收尾（intro 早就修了，这里漏了）。
+			//   原因：iOS 上 hxvlc 会在【加载 / 格式化阶段】就误派发一次
+			//   onEndReached（或在视频还没真正跑起来时派发）。原实现是
+			//   直接 `.add(onVideoFinished)` —— 于是 playElapsed 才 1 秒就收尾。
+			//
+			//   intro 那边（TitleState）早就用 MIN_INTRO_SECONDS(2.5s) 挡掉了，
+			//   兼容层这条路径当时没同步 ⇒ 就是「过场只播 1 秒」的真凶。
+			//
+			//   守卫逻辑：
+			//     · 播放不足门槛的 onEndReached 一律忽略（等真正播完）；
+			//     · 超过门槛才认为是真的播完，收尾。
+			//   onVideoFinished() 自带 `if (ended) return;` 去重，安全。
+			video.bitmap.onEndReached.add(function():Void
+			{
+				if (!playing) return;
+				if (playElapsed < MIN_PLAY_SECONDS)
+				{
+					diag('[onEndReached] 忽略过早的结束事件（playElapsed=' + playElapsed
+						+ ' < ' + MIN_PLAY_SECONDS + '）');
+					return;
+				}
+				onVideoFinished();
+			});
 			// [PE-iOS] 记录时长。
 			//   FlxVideoSprite 无 length 字段，时长在底层 bitmap(Video) 上，
 			//   单位【微秒】，且解析完成前为 0，所以用 onLengthChanged 事件拿。
@@ -744,19 +767,23 @@ class VideoHandler extends FlxSprite
 			if (!video.visible) video.visible = true;
 			if (!video.exists) video.exists = true;
 
-			// 坐标/缩放矫正：以相机视口为基准重新居中。
+			// 坐标/缩放矫正：以【游戏窗口逻辑尺寸 FlxG.width/height】为基准重新居中。
 			// 只在尺寸有效时做，避免每帧抖动。
 			try
 			{
 				var bmd = video.bitmap != null ? video.bitmap.bitmapData : null;
 				if (bmd != null && bmd.width > 1 && bmd.height > 1)
 				{
-					var cam:flixel.FlxCamera = null;
-					if (video.cameras != null && video.cameras.length > 0) cam = video.cameras[0];
-					if (cam == null && FlxG.cameras.list.length > 0) cam = FlxG.cameras.list[0];
-
-					var viewW:Float = (cam != null) ? cam.width : FlxG.width;
-					var viewH:Float = (cam != null) ? cam.height : FlxG.height;
+					// ★ 基准与 onFormatSetup 保持一致：用游戏窗口逻辑尺寸 FlxG.width/height。
+					//   （不能用相机视口 —— 那会让视频只填满相机那一条，表现为「没铺满」。）
+					var viewW:Float = FlxG.width;
+					var viewH:Float = FlxG.height;
+					if (viewW <= 0 || viewH <= 0)
+					{
+						viewW = FlxG.initialWidth;
+						viewH = FlxG.initialHeight;
+					}
+					if (viewW <= 0 || viewH <= 0) { viewW = 1280; viewH = 720; }
 					if (viewW > 0 && viewH > 0)
 					{
 						var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
@@ -784,20 +811,23 @@ class VideoHandler extends FlxSprite
 
 			// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
 			//   某些情况下 hxvlc 在 iOS 上【不派发 onEndReached】，
-			//   导致 substate 永远不关 ⇒ 「过场播完卡住、进不去打歌界面」。
-			//   用「已播放时长 > 视频时长 + 2 秒」做超时兜底；
-			//   时长来自 bitmap.onLengthChanged（已换算成秒，见 videoDurSec）；
-			//   拿不到时长时用 180 秒固定上限，绝不死锁。
-			//   （onVideoFinished 内部有 `if (ended) return;` 去重。）
+			//   导致永远不关 ⇒ 「过场播完卡住、进不去打歌界面」。
+			//
+			//   ⚠ 时长必须是「合理值」才用它做基准。
+			//   iOS 上 onLengthChanged 可能过早派发（解析未完成时给个 1 秒级的
+			//   假值），若直接拿它算 `videoDurSec + 2`，过场就会在 1 秒多被收尾
+			//   —— 这正是「只播 1s」的另一条路径。
+			//   所以：只有 videoDurSec >= MIN_PLAY_SECONDS 才认为时长可信。
 			playElapsed += elapsed;
-			if (videoDurSec > 0 && playElapsed > videoDurSec + 2.0)
+			var durUsable:Bool = (videoDurSec >= MIN_PLAY_SECONDS);
+			if (durUsable && playElapsed > videoDurSec + 2.0)
 			{
 				diag('[PE-iOS] 过场视频超时兜底收尾（onEndReached 未触发）dur=' + videoDurSec
 					+ ' elapsed=' + playElapsed);
 				onVideoFinished();
 				return;
 			}
-			else if (videoDurSec <= 0 && playElapsed > 180.0)
+			else if (!durUsable && playElapsed > 180.0)
 			{
 				diag('[PE-iOS] 过场视频时长未知，硬超时兜底收尾 elapsed=' + playElapsed);
 				onVideoFinished();
