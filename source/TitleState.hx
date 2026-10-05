@@ -451,6 +451,8 @@ class TitleState extends MusicBeatState
 	var introFrame:Int = 0;
 	#if VIDEOS_ALLOWED
 	var introVideo:hxvlc.flixel.FlxVideoSprite = null;
+	/// [PE-iOS] 片头视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知
+	var introVideoDurSec:Float = 0;
 	#end
 	/// 本次片头是不是「真视频」模式（否则走逐帧图）
 	var introUsingVideo:Bool = false;
@@ -536,6 +538,22 @@ class TitleState extends MusicBeatState
 				vs.scrollFactor.set(0, 0);
 			});
 			vs.bitmap.onEndReached.add(endIntroVideo);
+			// [PE-iOS] 记录视频时长。
+			//   注意：FlxVideoSprite 本身【没有 length 字段】，时长在底层
+			//   `hxvlc.openfl.Video` 上（即 vs.bitmap.length），单位【微秒】。
+			//   而且 length 在媒体解析完成前是 0，所以要靠 onLengthChanged 事件拿。
+			//   回调参数用 Dynamic 接收后立刻转成 Float 秒数存起来 ——
+			//   避免 Int64（hxcpp 下是对象）参与比较运算导致编译/运行问题。
+			try
+			{
+				vs.bitmap.onLengthChanged.add(function(us:Dynamic):Void
+				{
+					var v:Float = 0;
+					try { v = Std.parseFloat(Std.string(us)); } catch (e:Dynamic) { v = 0; }
+					if (v > 0) introVideoDurSec = v / 1000000.0;
+				});
+			}
+			catch (e:Dynamic) {}
 		}
 
 		var loaded:Bool = false;
@@ -625,6 +643,7 @@ class TitleState extends MusicBeatState
 			try { remove(introVideo, true); introVideo.destroy(); } catch (e:Dynamic) {}
 			introVideo = null;
 		}
+		introVideoDurSec = 0;
 		#end
 		// 记一下：片头播过了（模组里的 lua 会读这个标记，避免在 story 第一首又播一遍）
 		#if MODS_ALLOWED
@@ -671,27 +690,27 @@ class TitleState extends MusicBeatState
 					endIntroVideo();
 
 				// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
-				//   实测某些 hxvlc 版本（尤其 useTexture=true 的纹理路径）在 iOS 上
-				//   【不会派发 onEndReached】，导致 introPlaying 永远为 true
-				//   ⇒ 标题页输入被永久屏蔽 ⇒ 「片头播完卡住、进不去打歌界面」。
-				//   兜底策略：记录视频总时长，超过「时长 + 1.5 秒」仍未收到结束事件，
-				//   就主动收尾。（若 onEndReached 正常触发，endIntroVideo 内部有
-				//   `if (!introPlaying) return;` 去重，不会重复执行。）
-				if (introPlaying && introVideo != null)
+				//   实测某些情况下 hxvlc 在 iOS 上【不派发 onEndReached】，
+				//   导致 introPlaying 永远为 true ⇒ 标题页输入被永久屏蔽
+				//   ⇒ 「片头播完卡住、进不去打歌界面」。
+				//
+				//   时长来源：bitmap.onLengthChanged（已换算成【秒】存进 introVideoDurSec）。
+				//   （FlxVideoSprite 没有 length 字段，别写成 introVideo.length！）
+				//   拿不到时长时用固定上限兜底，绝不死锁。
+				//
+				//   endIntroVideo() 内部有 `if (!introPlaying) return;` 去重，
+				//   所以事件正常触发时不会重复执行。
+				if (introPlaying && introVideoDurSec > 0
+					&& introTime > introVideoDurSec + 1.5)
 				{
-					var dur:Float = 0;
-					try { dur = introVideo.length / 1000.0; } catch (e:Dynamic) { dur = 0; }
-					if (dur > 0 && introTime > dur + 1.5)
-					{
-						trace('[PE-iOS] 片头视频超时兜底收尾（onEndReached 未触发）dur=' + dur);
-						endIntroVideo();
-					}
-					else if (dur <= 0 && introTime > 600)
-					{
-						// 连时长都拿不到（load 异常）——给 10 分钟的理论上限，绝不死锁
-						trace('[PE-iOS] 片头视频时长未知，硬超时兜底收尾');
-						endIntroVideo();
-					}
+					trace('[PE-iOS] 片头视频超时兜底收尾（onEndReached 未触发）dur=' + introVideoDurSec);
+					endIntroVideo();
+				}
+				else if (introPlaying && introVideoDurSec <= 0 && introTime > 180.0)
+				{
+					// 连时长都拿不到 → 3 分钟硬上限，绝不死锁
+					trace('[PE-iOS] 片头视频时长未知，硬超时兜底收尾');
+					endIntroVideo();
 				}
 			}
 			else

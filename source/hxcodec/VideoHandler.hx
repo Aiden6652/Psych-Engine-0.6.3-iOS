@@ -45,6 +45,8 @@ class VideoHandler extends FlxSubState
 	private var diagFrame:Int = 0;
 	/** [PE-iOS] 已播放秒数，用于「onEndReached 不触发」的超时兜底 */
 	private var playElapsed:Float = 0;
+	/** [PE-iOS] 视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知 */
+	private var videoDurSec:Float = 0;
 
 	public function new():Void
 	{
@@ -209,6 +211,20 @@ class VideoHandler extends FlxSubState
 				diagRawBitmap('afterFormat', video);
 			});
 			video.bitmap.onEndReached.add(onVideoFinished);
+			// [PE-iOS] 记录时长。
+			//   FlxVideoSprite 无 length 字段，时长在底层 bitmap(Video) 上，
+			//   单位【微秒】，且解析完成前为 0，所以用 onLengthChanged 事件拿。
+			//   参数用 Dynamic 接收后立刻转 Float 秒数，避免 Int64 参与运算。
+			try
+			{
+				video.bitmap.onLengthChanged.add(function(us:Dynamic):Void
+				{
+					var v:Float = 0;
+					try { v = Std.parseFloat(Std.string(us)); } catch (e:Dynamic) { v = 0; }
+					if (v > 0) videoDurSec = v / 1000000.0;
+				});
+			}
+			catch (e:Dynamic) {}
 		}
 
 		var options:Array<String> = null;
@@ -238,6 +254,7 @@ class VideoHandler extends FlxSubState
 		started = true;
 		diagFrame = 0;
 		playElapsed = 0;
+		videoDurSec = 0;
 
 		new FlxTimer().start(0.001, function(_:FlxTimer)
 		{
@@ -308,22 +325,25 @@ class VideoHandler extends FlxSubState
 				diagRawBitmap('f' + diagFrame, video);
 
 			// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
-			//   某些 hxvlc 版本在 iOS + useTexture=true 下【不派发 onEndReached】，
+			//   某些情况下 hxvlc 在 iOS 上【不派发 onEndReached】，
 			//   导致 substate 永远不关 ⇒ 「过场播完卡住、进不去打歌界面」。
-			//   这里用「已播放时长 > 视频时长 + 2 秒」做超时兜底。
-			//   （onVideoFinished 内部有 `if (ended) return;` 去重，不会重复收尾。）
+			//   用「已播放时长 > 视频时长 + 2 秒」做超时兜底；
+			//   时长来自 bitmap.onLengthChanged（已换算成秒，见 videoDurSec）；
+			//   拿不到时长时用 180 秒固定上限，绝不死锁。
+			//   （onVideoFinished 内部有 `if (ended) return;` 去重。）
 			playElapsed += elapsed;
-			if (video != null)
+			if (videoDurSec > 0 && playElapsed > videoDurSec + 2.0)
 			{
-				var dur:Float = 0;
-				try { dur = video.length / 1000.0; } catch (e:Dynamic) { dur = 0; }
-				if ((dur > 0 && playElapsed > dur + 2.0) || (dur <= 0 && playElapsed > 120))
-				{
-					diag('[PE-iOS] 过场视频超时兜底收尾（onEndReached 未触发）dur=' + dur
-						+ ' elapsed=' + playElapsed);
-					onVideoFinished();
-					return;
-				}
+				diag('[PE-iOS] 过场视频超时兜底收尾（onEndReached 未触发）dur=' + videoDurSec
+					+ ' elapsed=' + playElapsed);
+				onVideoFinished();
+				return;
+			}
+			else if (videoDurSec <= 0 && playElapsed > 180.0)
+			{
+				diag('[PE-iOS] 过场视频时长未知，硬超时兜底收尾 elapsed=' + playElapsed);
+				onVideoFinished();
+				return;
 			}
 		}
 
