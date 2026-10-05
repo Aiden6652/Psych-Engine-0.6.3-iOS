@@ -33,9 +33,6 @@ using StringTools;
 class Main extends Sprite
 {
 	/**
-	 * [PE-iOS] 顶部黑边比例。
-	 *
-	/**
 	 * [PE-iOS] 顶部刘海/安全区占屏高的比例。
 	 *
 	 * 注意：**画面本身已不再做任何顶部裁切**（见 start() 里的视口段落）。
@@ -47,6 +44,46 @@ class Main extends Sprite
 	 *   换算到 stage：202 / 2.172 ≈ 92px，即 768 的 12.1%。
 	 */
 	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
+
+	/**
+	 * [PE-iOS] 视频渲染路径开关 —— 用于排查「过场视频只有声音 / 没画面」。
+	 *
+	 * 背景：hxvlc 有两条输出视频帧的路径，二者在不同场景下表现不一致，
+	 *   而且两次实测出现过【互相矛盾】的结论（同一对版本先后测出相反结果），
+	 *   猜测与「多相机初始化时机」「CPU 路径每帧拷 8MB 导致丢帧」等随机因素有关。
+	 *   ⇒ 因此做成开关，由实测定稿，不再靠推断。
+	 *
+	 * ┌─────────────┬────────────────────────────────────────────────┐
+	 * │ true（默认）│ GPU 纹理路径（hxvlc 默认行为）                  │
+	 * │             │ 优点：无额外内存拷贝，性能好，不易卡顿。        │
+	 * │             │ 疑点：有实测称「多相机场景（过场 substate）不出图」。│
+	 * ├─────────────┼────────────────────────────────────────────────┤
+	 * │ false       │ CPU 位图路径（Video.useTexture = false）        │
+	 * │             │ 优点：有实测称能修「过场只有声音」。            │
+	 * │             │ 代价：每帧多拷一份视频帧（1080p≈8MB），        │
+	 * │             │       可能造成随机掉帧/卡死。                   │
+	 * └─────────────┴────────────────────────────────────────────────┘
+	 *
+	 * 用法：改这个值 → 重新构建 → 测【过场视频】（不是 intro.mp4）。
+	 *   两个值各测一次，哪个能稳定出画面就用哪个。
+	 *
+	 * 相关实测记录：
+	 *   · e0a14ff(false)：视频都能播，但被放大（放大已由 Math.min 修掉）
+	 *   · 4b7f69e(true) ：只有 intro.mp4 正常，其他过场只有声音   ← 一次记录
+	 *   · 用户口述     ：4b7f69e 过场有画面(被放大)，之后版本只有声音 ← 相反记录
+	 */
+	static inline var PEI_USE_GPU_TEXTURE_PATH:Bool = true;
+
+	/**
+	 * [PE-iOS] 是否把视频缩放到「完整放得下」（不放大、不裁切）。
+	 *
+	 * true  = Math.min → 等比完整显示，留黑边（推荐，视频本来就该完整显示）
+	 * false = Math.max → 铺满画布，会放大并裁掉边缘
+	 *
+	 * 注：VideoHandler.hx（hxcodec 兼容层）里已固定用 Math.min，
+	 *   本开关只影响 Main.hx 的 scaleVideoBitmaps() 这条兜底路径。
+	 */
+	static inline var PEI_VIDEO_FIT_INSIDE:Bool = true;
 
 	// ==================== [PE-iOS] 画布定义 ====================
 	// width/height 恒为 1280x720（16:9）—— 这是全局唯一真相源：
@@ -99,9 +136,25 @@ class Main extends Sprite
 		setupGame();
 	}
 
-	// ==================== [PE-iOS] 视频 Bitmap 尺寸纠正 ====================
-	// 只在确实存在 hxvlc 的 Video Bitmap 时才干活（无视频时零开销），
-	// 把它的缩放对到画布大小（修“视频被放大”）。
+	// ==================== [PE-iOS] 视频原始 Bitmap 直显（视频画面兜底）====================
+	// 来源：35a1af5「视频显示兜底 —— 直接显示 hxvlc 内部的原始 Bitmap」。
+	//
+	// 原理：hxvlc 把视频帧写进一个 openfl.display.Bitmap，addChild 到 FlxG.game 上，
+	//   但【默认 visible=false】，正常靠 FlxSprite 从它的 bitmapData 中转显示。
+	//   当「中转链路」（FlxSprite → 相机 → SubState）在过场场景下失效时，
+	//   画面就出不来 ⇒ 有声音、没画面。
+	//
+	// 兜底做法：每若干帧扫一次 FlxG.game 的直接子节点，找到名字含 "Video" 的对象，
+	//   一旦它的 bitmapData 拿到真实尺寸，就：
+	//     visible = true  ← ★ 关键，不设这个则永远不显示
+	//     alpha   = 1
+	//     等比缩放 + 居中到 FlxG 逻辑区域
+	//   ⇒ 由 OpenFL 的 Bitmap 直接绘制（libVLC 官方示例即此做法），
+	//     彻底绕开 FlxSprite / 相机 / SubState 那一整套。
+	//
+	// ⚠ 教训：bc1e1b3 曾以「疑似启动崩溃」为由回退过这套扫描，
+	//   回退后过场视频就退化成「只有声音」。若将来又出问题，
+	//   注意保留 visible=true 这一句 —— 缺了它就等于没做。
 	private function scaleVideoBitmaps():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
@@ -141,17 +194,33 @@ class Main extends Sprite
 
 			try
 			{
+				// ★★★ 关键：必须把 hxvlc 内部那个 Video Bitmap 设为可见！ ★★★
+				//   hxvlc 的实现是：视频帧写进一个 openfl.display.Bitmap，
+				//   它被 addChild 到 FlxG.game 上，但【默认 visible = false】
+				//   （正常的显示路径是靠 FlxSprite 从它的 bitmapData 里「中转」出来）。
+				//
+				//   所以：只改 scale / 位置是不够的 —— 不设 visible=true，
+				//   它永远不参与绘制，表现就是「有声音、没画面」。
+				//   这正是 35a1af5 能做到「有画面」、而后来版本丢了这个设置、
+				//   退化成「只有声音」的直接原因。
+				Reflect.setProperty(c, 'visible', true);
+				Reflect.setProperty(c, 'alpha', 1);
+
 				// 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
 				// 之前用 Math.max 是「铺满画布」策略，会把画面放大并裁掉边缘
-				// —— 这正是用户反馈的「视频被放大」的来源之一。
+				// —— 这正是用户反馈的「视频被放大」的来源。
 				// 视频本来就该完整显示，宁可留黑边也不要放大。
-				var sc:Float = Math.min(FlxG.width / w, FlxG.height / h);
+				var sc:Float = PEI_VIDEO_FIT_INSIDE
+					? Math.min(FlxG.width / w, FlxG.height / h)
+					: Math.max(FlxG.width / w, FlxG.height / h);
 				if (sc <= 0 || sc != sc) sc = 1;
 				Reflect.setProperty(c, 'scaleX', sc);
 				Reflect.setProperty(c, 'scaleY', sc);
 				Reflect.setProperty(c, 'x', (FlxG.width - w * sc) / 2);
 				Reflect.setProperty(c, 'y', (FlxG.height - h * sc) / 2);
-				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h + ' -> scale=' + sc + ' (min/等比完整)\n');
+				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h
+					+ ' -> visible=true scale=' + sc
+					+ (PEI_VIDEO_FIT_INSIDE ? ' (min/等比完整)' : ' (max/铺满)') + '\n');
 			}
 			catch (e:Dynamic)
 			{
@@ -169,23 +238,28 @@ class Main extends Sprite
 
 	private function setupGame():Void
 	{
-		// ==================== [PE-iOS] 视频渲染路径 ====================
-		// ⚠ 历史遗留说明（两轮结论相反，以实测为准）：
-		//   0ca9ba4：为排查「过场视频没画面」曾强制 useTexture=false（CPU 位图路径）
-		//   4b7f69e：实测「视频已能正常播放」，于是撤销该设置、回默认 GPU 纹理路径，
-		//            理由是 CPU 路径每帧要多拷一份 1080p 帧（约 8MB），
-		//            易造成随机掉帧/卡死（tormentor 随机卡住即此类特征）
-		//
-		// ➜ 当前决定：**保持 hxvlc 默认（GPU 纹理路径）**，不再强制 useTexture。
-		//   依据：用户实测「所有版本 intro.mp4 都能正常出画面」，
-		//   且 4b7f69e 撤销后过场视频也确实能播 ⇒
-		//   「过场没画面」与渲染路径无关，此前那段「GPU 路径多相机不出图」的
-		//   推断已被实测推翻，不应再保留该强制设置。
-		//
-		//   若日后确实遇到某个视频在 GPU 路径下不出图，
-		//   再把它作为针对性开关临时打开（改 false），不要长期强制。
-		//
-		// （下面这段已停用，保留仅为标记位置）
+		// ==================== [PE-iOS] 视频渲染路径（由开关控制）====================
+		// 开关定义见类顶部 PEI_USE_GPU_TEXTURE_PATH 的注释（含两轮矛盾实测记录）。
+		// 这里只按开关执行，不再写死结论。
+		#if (VIDEOS_ALLOWED && ios)
+		try
+		{
+			if (PEI_USE_GPU_TEXTURE_PATH)
+			{
+				// 保持 hxvlc 默认：GPU 纹理路径（不做任何设置）
+				trace('[PE-iOS] 视频渲染：GPU 纹理路径（hxvlc 默认）');
+			}
+			else
+			{
+				hxvlc.openfl.Video.useTexture = false;
+				trace('[PE-iOS] 视频渲染：CPU 位图路径 (Video.useTexture=false)');
+			}
+		}
+		catch (e:Dynamic)
+		{
+			trace('[PE-iOS] 设置视频渲染路径失败（已忽略）: ' + e);
+		}
+		#end
 
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
