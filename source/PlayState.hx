@@ -186,14 +186,23 @@ class PlayState extends MusicBeatState
 	 * 症状（用户实测）：对手唱歌时整个界面被放大，放大后不恢复 ——
 	 *   4 个箭头只能看到一半、下方血条也只能看到一半（游戏窗口大小不变）。
 	 *
-	 * 原因：引擎在两处会自动给相机加 zoom，而且只要 camZooming==true 就【不会回落】：
-	 *   1) opponentNoteHit —— 对手每命中一个音符 zoom += 0.015（本节 4866 行附近）
-	 *   2) sectionHit —— 每个 section 开头 zoom += 0.015（本节 5094 行附近）
-	 *   两者累加，打一首歌就会被推得很近且永不还原。
+	 * 真正元凶（★ 关键）：
+	 *   opponentNoteHit() 里 `camZooming = true;` —— 对手每唱一个音符就置位。
+	 *   它一旦为 true，update() 里的 lerp 回落机制就【持续生效】：
+	 *     FlxG.camera.zoom → defaultCamZoom（镜头推近）
+	 *     camHUD.zoom      → 1（箭头/血条整体缩放）
+	 *   ⇒ 这就是「UI 跟着一起放大」的原因。
+	 *   ⚠ 这一行原版【既没有 ClientPrefs.camZooms 门槛，也没有任何开关】，
+	 *     所以只堵下面那些 `zoom += x` 是没用的 —— 对手一开口就把它拉回来。
 	 *
-	 * 本开关默认 false：**关掉引擎自动推近**，但【模组的镜头事件不受影响】——
-	 *   - 'Add Camera Zoom' 事件（模组用 value1/value2 指定推近量）仍然生效；
-	 *   - 'Lightning'（闪电）事件里的 zoom += 0.5 仍然生效。
+	 * 除元凶外，还有 4 处引擎自动加 zoom（全部纳入本开关）：
+	 *   1) Lightning 事件 case 0 —— zoom += 0.5（本节 3515 行附近）
+	 *   2) Lightning 事件 case 1 —— zoom += 0.5（本节 3542 行附近）
+	 *   3) opponentNoteHit     —— zoom += 0.015（本节 4894 行附近）
+	 *   4) sectionHit          —— zoom += 0.015（本节 5122 行附近）
+	 *
+	 * 本开关默认 false：**关掉引擎自动推近**，但【模组显式事件不受影响】——
+	 *   'Add Camera Zoom' 事件（模组用 value1/value2 指定推近量）仍然生效。
 	 * 也就是说：只有引擎「自作主张」的那部分被禁掉，模组想要的效果照旧。
 	 *
 	 * 想让引擎恢复原行为：把本常量改为 true。
@@ -3508,7 +3517,11 @@ class PlayState extends MusicBeatState
 						if(phillyGlowGradient.visible)
 						{
 							doFlash();
-							if(ClientPrefs.camZooms)
+							// [PE-iOS] 同 opponentNoteHit/sectionHit：Lightning 事件的
+							// camera.zoom += 0.5（是自动 zoom 0.015 的 33 倍）同样
+							// 不会回落（camZooming 被置 true 后 lerp 停止），
+							// 一旦触发就永久放大 0.5 倍。纳入 PEI_AUTO_CAMZOOM 控制。
+							if(ClientPrefs.camZooms && PEI_AUTO_CAMZOOM)
 							{
 								FlxG.camera.zoom += 0.5;
 								camHUD.zoom += 0.1;
@@ -3534,7 +3547,8 @@ class PlayState extends MusicBeatState
 						if(!phillyGlowGradient.visible)
 						{
 							doFlash();
-							if(ClientPrefs.camZooms)
+							// [PE-iOS] 同 case 0，纳入 PEI_AUTO_CAMZOOM 控制。
+							if(ClientPrefs.camZooms && PEI_AUTO_CAMZOOM)
 							{
 								FlxG.camera.zoom += 0.5;
 								camHUD.zoom += 0.1;
@@ -3593,6 +3607,8 @@ class PlayState extends MusicBeatState
 				killHenchmen();
 
 			case 'Add Camera Zoom':
+				// [PE-iOS] ⚠ 这是模组作者【显式】写的事件，【故意不纳入】PEI_AUTO_CAMZOOM。
+				//   策略：只关「引擎自动」的相机缩放，模组主动要的特效一律保留。
 				if(ClientPrefs.camZooms && FlxG.camera.zoom < 1.35) {
 					var camZoom:Float = Std.parseFloat(value1);
 					var hudZoom:Float = Std.parseFloat(value2);
@@ -4588,7 +4604,17 @@ class PlayState extends MusicBeatState
 
 	function opponentNoteHit(note:Note):Void
 	{
-		if (Paths.formatToSongPath(SONG.song) != 'tutorial')
+		// [PE-iOS] ★ 打歌「放大」的真正元凶 ★
+		// 原逻辑：对手每唱一个音符就把 camZooming 置 true，
+		//   于是 3117 行的 lerp 开始生效 —— camHUD.zoom 从 1 向目标偏，
+		//   FlxG.camera.zoom 向 defaultCamZoom 偏 ⇒ 相机 + HUD（箭头/血条）
+		//   一起持续放大，表现为「UI 跟着放大、箭头血条只剩一半」。
+		//
+		//   这行原本【既没有 ClientPrefs.camZooms 门槛，也不受任何开关控制】，
+		//   所以之前堵另外 4 处都没用 —— 对手一开口就又把它拉回 true 了。
+		//
+		// 现逻辑：纳入 PEI_AUTO_CAMZOOM（只关引擎自动，模组事件不受影响）。
+		if (Paths.formatToSongPath(SONG.song) != 'tutorial' && PEI_AUTO_CAMZOOM)
 			camZooming = true;
 
 		if(note.noteType == 'Hey!' && dad.animOffsets.exists('hey')) {

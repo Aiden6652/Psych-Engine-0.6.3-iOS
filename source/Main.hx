@@ -34,28 +34,18 @@ class Main extends Sprite
 	/**
 	 * [PE-iOS] 顶部黑边比例。
 	 *
+	/**
+	 * [PE-iOS] 顶部刘海/安全区占屏高的比例。
+	 *
+	 * 注意：**画面本身已不再做任何顶部裁切**（见 start() 里的视口段落）。
+	 * 本常量现在只用于一件事：给 FPS 计数器之类的浮动 HUD 让开刘海区。
+	 * 色带贴底由 FlxHitbox / Controls 各自处理。
+	 *
 	 * 实测参照（iPad Pro 11"，屏幕 2420x1668，stage 1024x768）：
-	 *   无视频版：顶部留黑 ≈ 202px（屏幕坐标），内容一直蓴到屏幕最底部。
+	 *   无视频版：顶部留黑 ≈ 202px（屏幕坐标）。
 	 *   换算到 stage：202 / 2.172 ≈ 92px，即 768 的 12.1%。
 	 */
 	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
-
-	/**
-	 * [PE-iOS] 实际下移量占“顶部黑边”的比例（折中系数）。
-	 *
-	 * 两个需求是矛盾的，这里取折中：
-	 *   - 完全不下移（0.0）：画面居中，打歌不会“被放大/底部被裁”，
-	 *     但触控色带会悬在屏幕上边（离底约 208px）；
-	 *   - 完全下移（1.0）：色带能贴到屏幕底，但画面底部会被裁 208px，
-	 *     表现出来就是“打歌时画面放大”。
-	 * 0.5 时：色带下移约 104px（已经很接近底部），
-	 * 底部裁切同样减半（104px），“放大”感明显减轻。
-	 *
-	 * 想回哪边就把这两个常量往哪边调：
-	 *   只要不裁切 → 把本常量改 0.0；
-	 *   只要色带贴底 → 改成 1.0。
-	 */
-	static inline var IOS_YOFFSET_FACTOR:Float = 0.5;
 
 	var game = {
 		width: 1280,
@@ -191,36 +181,45 @@ class Main extends Sprite
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		var topInset:Int = 0;
-		var viewHeight:Int = stageHeight;
-		if (IOS_TOP_INSET_RATIO > 0)
-		{
-			topInset = Std.int(stageHeight * IOS_TOP_INSET_RATIO);
-			viewHeight = stageHeight - topInset;
-			if (viewHeight < 1)
-			{
-				topInset = 0;
-				viewHeight = stageHeight;
-			}
-		}
+		// ==================== [PE-iOS] 视口：锁 16:9 + 等比居中 ====================
+		// 背景（问题根因，对照上游 0.6.3 原版 setupGame()）：
+		//   1) 上游在 zoom==-1 时会 `gameWidth = Math.ceil(stageWidth/zoom)`，
+		//      把画布重算成「屏幕比例」。iPad 是 4:3 ⇒ 舞台变成 4:3，
+		//      而模组特效/HUD 都按 16:9 设计 ⇒ 铺不满 + HUD 被裁一半。
+		//   2) 上游是 `new FlxGame(..., zoom, ...)` 无条件传 zoom；
+		//      本 iOS 版把它包在 `#if (flixel < "5.0.0")` 里 ⇒ flixel 5.x 下
+		//      zoom 根本没传，舞台按 1280x720 原始尺寸直接贴左上角。
+		//      iPad stage 是 1024x768 < 1280x720 中的宽 ⇒ 右侧/底部被裁，
+		//      表现为「箭头只剩一半、血条只剩一半」。
+		//
+		// 修法：不依赖 FlxGame 的 zoom 参数（跨 flixel 版本行为不一致），
+		//   改为「画布恒定 16:9 + 手动 scale + 居中」——
+		//   本段只做数值计算，真正的 scale/x/y 在 addChild 之后统一施加。
+		var canvasW:Float = game.width;                 // 1280，恒定
+		var canvasH:Float = canvasW * 9.0 / 16.0;       // 720，恒定 16:9
+		var viewHeight:Float = stageHeight;
 
+		// 等比缩放系数：min ⇒ 保证画布完整放得下，宁可留黑边也不裁切
 		if (game.zoom == -1.0)
-		{
-			var ratioX:Float = stageWidth / game.width;
-			var ratioY:Float = viewHeight / game.height;
-			game.zoom = Math.min(ratioX, ratioY);
-			game.width = Math.ceil(stageWidth / game.zoom);
-			game.height = Math.ceil(viewHeight / game.zoom);
-		}
+			game.zoom = Math.min(stageWidth / canvasW, viewHeight / canvasH);
 
-		var yOffset:Int = Std.int(topInset * IOS_YOFFSET_FACTOR);
+		// 缩放后画布的像素尺寸 + 居中偏移（黑边均分到两侧）
+		var fillW:Float = canvasW * game.zoom;
+		var fillH:Float = canvasH * game.zoom;
+		var canvasX:Float = Math.floor((stageWidth - fillW) * 0.5);
+		var canvasY:Float = Math.floor((viewHeight - fillH) * 0.5);
+
+		// 把画布实际尺寸写回 game（供 FlxGame 构造使用；值恒为 16:9）
+		game.width = Std.int(canvasW);
+		game.height = Std.int(canvasH);
 
 		var info:String = 'stage=' + stageWidth + 'x' + stageHeight
-			+ '\ntopInset=' + topInset
-			+ '\nyOffset=' + yOffset + '（折中系数 ' + IOS_YOFFSET_FACTOR + '）'
-			+ '\nviewHeight=' + viewHeight
 			+ '\ncanvas=' + game.width + 'x' + game.height
-			+ '\nzoom=' + game.zoom + '\n';
+			+ ' (比例 ' + Math.round(canvasW / canvasH * 1000) / 1000 + ')'
+			+ '\nscale=' + Math.round(game.zoom * 1000) / 1000
+			+ '\nfill=' + Math.round(fillW) + 'x' + Math.round(fillH)
+			+ '\nletterbox=' + Math.round(stageWidth - fillW) + 'x' + Math.round(viewHeight - fillH)
+			+ '\noffset=' + canvasX + ',' + canvasY + '\n';
 		trace('[PE-iOS] 视口：' + info.replace('\n', ' '));
 
 		#if ios
@@ -234,22 +233,23 @@ class Main extends Sprite
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// 折中下移（直接赋值，不累加，所以不存在双重偏移）：
-		// Flixel 自己会算 y = topInset/2；这里覆写成 topInset*factor。
-		if (yOffset > 0)
-		{
-			flxGame.y = yOffset;
-			var frames:Int = 0;
-			var applier:Event->Void = null;
-			applier = function(e:Event):Void
-			{
-				flxGame.y = yOffset;
-				frames++;
-				if (frames > 60 && Lib.current.stage != null)
-					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, applier);
-			};
-			Lib.current.stage.addEventListener(Event.ENTER_FRAME, applier);
-		}
+		// ==================== [PE-iOS] 手动缩放 + 居中 ====================
+		// 不再依赖 FlxGame 的 zoom 参数（flixel 5.x 下那个参数不生效，
+		//   舞台会按 1280x720 原尺寸贴左上角 ⇒ 右侧/底部被裁）。
+		//
+		// 改为直接对 flxGame 这个 Sprite 施加等比 scale 并居中：
+		//   scaleX/scaleY = game.zoom（min 系数，等比，不变形）
+		//   x/y = 居中偏移（canvasX/canvasY，黑边两侧均分）
+		// ⇒ 16:9 画布永远完整可见、居中，黑边由 stage 背景填充。
+		flxGame.scaleX = game.zoom;
+		flxGame.scaleY = game.zoom;
+		flxGame.x = canvasX;
+		flxGame.y = canvasY;
+
+		// stage 不缩放、左上角对齐 —— 我们自己在 Sprite 层面做缩放和居中
+		//   （保持 NO_SCALE 可以避免 OpenFL 二次缩放导致坐标错乱）
+		Lib.current.stage.align = "tl";
+		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
 
 		// 视频 Bitmap 尺寸纠正（无视频时内部会直接跳过，不产生开销）
 		Lib.current.stage.addEventListener(Event.ENTER_FRAME, function(e:Event):Void
@@ -260,11 +260,15 @@ class Main extends Sprite
 		});
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
-		if (yOffset > 0)
-			fpsVar.y = yOffset + 3;
+		// [PE-iOS] 不再用已删除的 yOffset。FPS 计数器直接避开顶部刘海区，
+		//   用常量比例算一个固定下移量（画面本身是完全居中的，不受影响）。
+		{
+			var hudInset:Int = Std.int(Lib.current.stage.stageHeight * IOS_TOP_INSET_RATIO);
+			if (hudInset > 6)
+				fpsVar.y = hudInset - 3;
+		}
 		addChild(fpsVar);
-		Lib.current.stage.align = "tl";
-		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
+		// align/scaleMode 已在上面统一设置（NO_SCALE + tl），此处不再重复。
 		if(fpsVar != null) {
 			fpsVar.visible = ClientPrefs.showFPS;
 		}
