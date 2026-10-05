@@ -4,6 +4,7 @@ import flixel.graphics.FlxGraphic;
 import flixel.FlxG;
 import flixel.FlxGame;
 import flixel.FlxState;
+import flixel.system.scaleModes.RatioScaleMode;   // [PE-iOS] 16:9 等比适配 + 黑边居中
 import openfl.Assets;
 import openfl.Lib;
 import openfl.display.Bitmap;
@@ -47,6 +48,18 @@ class Main extends Sprite
 	 */
 	static inline var IOS_TOP_INSET_RATIO:Float = 0.121;
 
+	// ==================== [PE-iOS] 画布定义 ====================
+	// width/height 恒为 1280x720（16:9）—— 这是全局唯一真相源：
+	//   · 它们被传给 `new FlxGame(...)` → FlxG.initialWidth/initialHeight
+	//   · BaseScaleMode.onMeasure() 每次都把 FlxG.width/height 重置回这两个值
+	//   · RatioScaleMode 按 FlxG.width/height 的【比例】(=16:9) 适配屏幕
+	//   · 相机视口（camGame/camHUD）也取 FlxG.width/height
+	// ⇒ 只要这里是 16:9，全链路就是 16:9。
+	//
+	// ⚠ zoom 字段已【不再使用】：原版用它同时充当「FlxGame 的 Zoom 参数」，
+	//   但那个参数实际只写进 FlxCamera.defaultZoom（见构造处说明），
+	//   拿它做屏幕适配会污染 initialZoom。现在固定传 1.0，此字段仅作历史保留。
+	//   屏幕适配统一交给 RatioScaleMode。
 	var game = {
 		width: 1280,
 		height: 720,
@@ -181,45 +194,57 @@ class Main extends Sprite
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		// ==================== [PE-iOS] 视口：锁 16:9 + 等比居中 ====================
-		// 背景（问题根因，对照上游 0.6.3 原版 setupGame()）：
-		//   1) 上游在 zoom==-1 时会 `gameWidth = Math.ceil(stageWidth/zoom)`，
-		//      把画布重算成「屏幕比例」。iPad 是 4:3 ⇒ 舞台变成 4:3，
-		//      而模组特效/HUD 都按 16:9 设计 ⇒ 铺不满 + HUD 被裁一半。
-		//   2) 上游是 `new FlxGame(..., zoom, ...)` 无条件传 zoom；
-		//      本 iOS 版把它包在 `#if (flixel < "5.0.0")` 里 ⇒ flixel 5.x 下
-		//      zoom 根本没传，舞台按 1280x720 原始尺寸直接贴左上角。
-		//      iPad stage 是 1024x768 < 1280x720 中的宽 ⇒ 右侧/底部被裁，
-		//      表现为「箭头只剩一半、血条只剩一半」。
+		// ==================== [PE-iOS] 视口：锁定 16:9（交给 RatioScaleMode）====================
 		//
-		// 修法：不依赖 FlxGame 的 zoom 参数（跨 flixel 版本行为不一致），
-		//   改为「画布恒定 16:9 + 手动 scale + 居中」——
-		//   本段只做数值计算，真正的 scale/x/y 在 addChild 之后统一施加。
-		var canvasW:Float = game.width;                 // 1280，恒定
-		var canvasH:Float = canvasW * 9.0 / 16.0;       // 720，恒定 16:9
-		var viewHeight:Float = stageHeight;
+		// ── 根因（对照上游 0.6.3 原版 setupGame()）────────────────────────
+		// 上游在 zoom == -1 时：
+		//     zoom       = Math.min(stageWidth / gameWidth, stageHeight / gameHeight);
+		//     gameWidth  = Math.ceil(stageWidth / zoom);
+		//     gameHeight = Math.ceil(stageHeight / zoom);
+		// 这两行把画布重算成【屏幕比例】。iPad 是 4:3 ⇒ gameWidth:gameHeight = 4:3。
+		//
+		// 而 HaxeFlixel 的默认缩放模式 RatioScaleMode（FlxG.hx 第 179 行
+		// `scaleMode = new RatioScaleMode()`）是按 `FlxG.width/FlxG.height`
+		// 这个【比例】去适配屏幕的：
+		//     ratio = FlxG.width / FlxG.height            // 4:3 = 1.3333
+		//     realRatio = stageWidth / stageHeight        // 1024/768 = 1.3333
+		//     ⇒ 两者相等 ⇒ 整屏铺满、不加黑边
+		//     ⇒ 相机视口就是 4:3
+		//
+		// ⇒ 模组特效按 16:9 设计 ⇒ 在 4:3 视口里【铺不满】。
+		//    这就是「不是 16:9」的唯一根因。
+		//
+		// ── 修法：只做一件事 —— 把画布锁回 16:9 ──────────────────────────
+		// 不再自己算 scale / 自己居中（那是重复劳动，而且会和 Flixel 打架：
+		//   BaseScaleMode.updateGamePosition() 第 92-93 行会
+		//   `FlxG.game.x = offset.x; FlxG.game.y = offset.y;` 自己居中）。
+		//
+		// 只要让 FlxG.width/height = 1280:720，RatioScaleMode 就会自动算：
+		//   ratio = 1.7778 > realRatio = 1.3333
+		//   ⇒ 按宽度适配：gameSize = 1024 x 576（标准 16:9）
+		//   ⇒ 等比 scale、上下黑边、自动居中
+		// 完全是 Flixel 原生行为，零手写适配代码。
+		//
+		// FlxG.width/height 的来源：BaseScaleMode.onMeasure() 第 34-35 行
+		//   `FlxG.width = FlxG.initialWidth; FlxG.height = FlxG.initialHeight;`
+		// 而 initialWidth/Height 就是 `new FlxGame(game.width, game.height, ...)`
+		// 传进去的那两个值。所以下面把 game.width/height 钉死即可。
+		game.width = 1280;
+		game.height = 720;   // 1280 : 720 = 16 : 9
 
-		// 等比缩放系数：min ⇒ 保证画布完整放得下，宁可留黑边也不裁切
-		if (game.zoom == -1.0)
-			game.zoom = Math.min(stageWidth / canvasW, viewHeight / canvasH);
-
-		// 缩放后画布的像素尺寸 + 居中偏移（黑边均分到两侧）
-		var fillW:Float = canvasW * game.zoom;
-		var fillH:Float = canvasH * game.zoom;
-		var canvasX:Float = Math.floor((stageWidth - fillW) * 0.5);
-		var canvasY:Float = Math.floor((viewHeight - fillH) * 0.5);
-
-		// 把画布实际尺寸写回 game（供 FlxGame 构造使用；值恒为 16:9）
-		game.width = Std.int(canvasW);
-		game.height = Std.int(canvasH);
+		// 若 build 配置或外部改动把比例弄坏了，这里兜底纠正
+		if (Math.abs(game.width / game.height - 16.0 / 9.0) > 0.001)
+		{
+			trace('[PE-iOS] 画布比例异常（' + game.width + 'x' + game.height + '），已纠正为 1280x720');
+			game.width = 1280;
+			game.height = 720;
+		}
 
 		var info:String = 'stage=' + stageWidth + 'x' + stageHeight
 			+ '\ncanvas=' + game.width + 'x' + game.height
-			+ ' (比例 ' + Math.round(canvasW / canvasH * 1000) / 1000 + ')'
-			+ '\nscale=' + Math.round(game.zoom * 1000) / 1000
-			+ '\nfill=' + Math.round(fillW) + 'x' + Math.round(fillH)
-			+ '\nletterbox=' + Math.round(stageWidth - fillW) + 'x' + Math.round(viewHeight - fillH)
-			+ '\noffset=' + canvasX + ',' + canvasY + '\n';
+			+ '\ncanvasRatio=' + Math.round(game.width / game.height * 10000) / 10000
+			+ '\nstageRatio=' + Math.round(stageWidth / stageHeight * 10000) / 10000
+			+ '\n（RatioScaleMode 将按 canvasRatio 适配并自动加黑边居中）\n';
 		trace('[PE-iOS] 视口：' + info.replace('\n', ' '));
 
 		#if ios
@@ -231,73 +256,53 @@ class Main extends Sprite
 		ClientPrefs.loadDefaultKeys();
 
 		// ==================== [PE-iOS] FlxGame 构造 ====================
-		// ⚠ 关键：Zoom 参数【传 1.0】，不传 game.zoom！
+		// ⚠ Zoom 参数【传 1.0】，不传 game.zoom —— 两个原因：
 		//
-		// 依据 flixel 4.11.0 源码（本项目 hmm.json 锁的就是 flixel 4.11.0）：
-		//   FlxGame.new(..., Zoom, ...)  →  FlxG.init(this, W, H, Zoom)
-		//   FlxG.init() 里：
-		//       FlxG.initialZoom = FlxCamera.defaultZoom = Zoom;   // ← Zoom 只影响相机
-		//       resizeGame(stage.stageWidth, stage.stageHeight);
+		// (1) 依据 flixel 4.11.0 源码（本项目 hmm.json 锁的就是 4.11.0）：
+		//       FlxGame.new(..., Zoom, ...)  →  FlxG.init(this, W, H, Zoom)
+		//       FlxG.init() 第 584 行：
+		//           FlxG.initialZoom = FlxCamera.defaultZoom = Zoom;
+		//     也就是说这个 Zoom【不是】用来适配屏幕的，它只是
+		//       「每个相机的默认缩放系数」。
+		//     传 game.zoom(≈0.8) 进去 = 给所有相机预设放大
+		//       ⇒ 画面 + UI 一起被推近（「放大」感的来源之一）。
 		//
-		// 也就是说 FlxGame 的 Zoom【不是】缩放游戏画面用的，它只被当作
-		//   「每个相机默认带一个 zoom 系数」。传 game.zoom(=0.8) 进去，
-		//   等于给所有相机预设了放大 ⇒ 画面 + UI 一起被推近（"放大"感来源之一）。
+		// (2) 更关键：BaseScaleMode 算屏幕适配时用的是
+		//       scale.x = gameSize.x / (FlxG.width  * FlxG.initialZoom)
+		//       scale.y = gameSize.y / (FlxG.height * FlxG.initialZoom)
+		//     initialZoom 若掺进一个「为了适配屏幕而算出来的数」，
+		//     会和 gameSize 的适配计算互相抵消/打架，缩放结果不可预期。
+		//     传 1.0 让 initialZoom 保持中性，适配完全由 RatioScaleMode 负责。
 		//
-		// 所以这里传 1.0，让相机默认缩放回归 1；
-		//   画面缩放完全交给下面手动设置的 flxGame.scaleX/scaleY，
-		//   这样「相机缩放」与「画布适配」两件事彻底解耦，互不干扰。
-		//
-		// 注：FlxGame 自己会设 stage.scaleMode = NO_SCALE / align = TOP_LEFT
-		//   （flixel 4.11 FlxGame.hx 第 318-319 行），且是在构造阶段。
-		//   我们在 addChild 之后覆写 align/scaleMode 与 x/y/scale，故不受影响。
+		// 结论：initialZoom 归 1，画布比例归 16:9，屏幕适配归 RatioScaleMode。
+		//       三件事各司其职，不重叠、不打架。
 		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, 1.0, game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
-		// ==================== [PE-iOS] 手动缩放 + 居中 ====================
-		// 为什么不用 FlxGame 的 zoom 参数缩放画面：
-		//   见上面构造处的说明 —— 那个参数只被写进 FlxCamera.defaultZoom，
-		//   用它「适配屏幕」等于给所有相机预设放大，画面和 UI 会一起被推近。
-		//   而 FlxGame 自己设的 stage.align=TOP_LEFT + NO_SCALE，
-		//   又让 1280x720 的画布在 iPad(1024x768) 上左上对齐、右侧底部被裁。
+		// ==================== [PE-iOS] 屏幕适配：交给 RatioScaleMode ====================
+		// 不再手写 scaleX/scaleY/x/y —— 那是重复劳动，而且会被 Flixel 覆盖：
+		//   BaseScaleMode.updateGamePosition()（BaseScaleMode.hx 第 92-93 行）：
+		//       FlxG.game.x = offset.x;
+		//       FlxG.game.y = offset.y;
+		//   Flixel 每帧/每次 resize 都会自己给 FlxGame 设居中偏移。
 		//
-		// 做法：直接对 flxGame 这个 Sprite 施加等比 scale 并居中：
-		//   scaleX/scaleY = game.zoom（min 系数，等比，不变形）
-		//   x/y = 居中偏移（canvasX/canvasY，黑边两侧均分）
-		// ⇒ 16:9 画布永远完整可见、居中，黑边由 stage 背景填充。
+		// FlxG.scaleMode 默认就是 `new RatioScaleMode()`（FlxG.hx 第 179 行），
+		// 行为：
+		//   用 FlxG.width/FlxG.height 的比例（现在是 1280:720 = 16:9）去适配屏幕，
+		//   按需加黑边、等比缩放、自动居中。
 		//
-		// ⚠ 用「每帧兜底」而不是一次性赋值：
-		//   FlxGame 内部有 RESIZE 监听 → onResize → FlxG.resizeGame →
-		//   scaleMode.onMeasure()，在某些时机（如首次真正拿到 stage 尺寸、
-		//   或设备旋转）会把 scale/位置改回去。所以每帧确认一次，代价可忽略。
-		var applyViewport:Void->Void = function():Void
-		{
-			if (flxGame.scaleX != game.zoom) flxGame.scaleX = game.zoom;
-			if (flxGame.scaleY != game.zoom) flxGame.scaleY = game.zoom;
-			if (flxGame.x != canvasX) flxGame.x = canvasX;
-			if (flxGame.y != canvasY) flxGame.y = canvasY;
-		};
-		applyViewport();
+		// 这里显式再设一次（幂等），并确保它是「显示全部（不裁切）」那种：
+		//   RatioScaleMode(false)  = 完整显示 + 黑边（我们要的）
+		//   RatioScaleMode(true)   = 裁掉多余边、铺满屏幕（不要）
+		var ratioMode:RatioScaleMode = new RatioScaleMode(false);
+		FlxG.scaleMode = ratioMode;
+		trace('[PE-iOS] 适配模式：RatioScaleMode(fillScreen=false) —— 完整显示 + 黑边');
 
-		// stage 不缩放、左上角对齐 —— 我们自己在 Sprite 层面做缩放和居中
-		//   （保持 NO_SCALE 可以避免 OpenFL 二次缩放导致坐标错乱）
+		// stage 保持 FlxGame 设的 NO_SCALE / TOP_LEFT 即可：
+		//   缩放和居中由 scaleMode 在 Sprite 层完成，stage 本身不缩放。
+		//   （FlxGame 构造时已设，这里显式重复一次以防被外部改动。）
 		Lib.current.stage.align = "tl";
 		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
-
-		// 每帧兜底：前 300 帧内持续校正（约 5 秒，覆盖启动期各种 resize 时机）。
-		//   之后若尺寸没变就自动摘掉监听，正常运行零开销。
-		{
-			var vpFrames:Int = 0;
-			var vpApplier:Event->Void = null;
-			vpApplier = function(e:Event):Void
-			{
-				vpFrames++;
-				applyViewport();
-				if (vpFrames > 300 && Lib.current.stage != null)
-					Lib.current.stage.removeEventListener(Event.ENTER_FRAME, vpApplier);
-			};
-			Lib.current.stage.addEventListener(Event.ENTER_FRAME, vpApplier);
-			trace('[PE-iOS] 视口兜底校正已挂载（前 300 帧）');
-		}
 
 		// 视频 Bitmap 尺寸纠正（无视频时内部会直接跳过，不产生开销）
 		Lib.current.stage.addEventListener(Event.ENTER_FRAME, function(e:Event):Void
