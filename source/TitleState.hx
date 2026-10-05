@@ -510,39 +510,43 @@ class TitleState extends MusicBeatState
 				var bmd = vs.bitmap.bitmapData;
 				if (bmd == null) return;
 
-				// [PE-iOS] ★ 修「片头视频太靠右 / 右边被切」★
-				// 原写法两处问题：
-				//   1) Math.max(...) —— 铺满策略，视频被放大到超出屏幕两侧 ⇒ 边缘被裁
-				//   2) vs.screenCenter() —— 它是按 FlxSprite 的 width/height 与
-				//      FlxG.width/height 算的，但我们刚 setGraphicSize 过、
-				//      offset/hitbox 可能还没同步，居中会算歪。
-				//
-				// 本 sprite 没有指定 cameras ⇒ 挂在 FlxG.cameras.list[0]（camGame）上。
-				// camGame 的【视口尺寸】恒等于 FlxG.width x FlxG.height（由 scaleMode
-				// 保证），相机自身的 x/y 黑边偏移由 Flixel 在绘制时施加，
-				// 与 sprite 坐标无关。所以这里直接用 FlxG.width/height 作为参照
-				// 就是正确的，不需要去读 cameras[0]。
 				var viewW:Float = FlxG.width;
 				var viewH:Float = FlxG.height;
+				var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
+				if (sc <= 0 || sc != sc) sc = 1;
 
-				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
-				if (scale <= 0 || scale != scale) scale = 1;
-				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
-				var th:Int = Std.int(Math.max(1, bmd.height * scale));
-				vs.setGraphicSize(tw, th);
+				// ★★★ [PE-iOS] 关键：不要用 setGraphicSize() ★★★
+				//
+				//   FlxSprite.setGraphicSize(W,H) 的内部实现是：
+				//       scale.x = W / frameWidth;
+				//       scale.y = H / frameHeight;
+				//   —— 它【除以当前 frame 尺寸】来反推缩放比例。
+				//
+				//   而 FlxVideoSprite 的帧更新方式是：hxvlc 在【它自己的】
+				//   onFormatSetup 回调里调 loadGraphic(FlxGraphic.fromBitmapData(...))。
+				//   也就是说，我们的回调与 hxvlc 的回调挂在【同一个事件】上，
+				//   执行顺序取决于谁先 add。若我们的先跑，frameWidth 还是
+				//   `makeGraphic(1, 1)` 留下的 1，于是：
+				//       scale.x = (1920 * 0.667) / 1 = 1280   ← 灾难性放大
+				//   即使 frame 已更新过，只要 frame 与 bmd 不同步，
+				//   算出的 scale 就是错的 ⇒ 视频被放大，
+				//   锚点在左上角 ⇒ 【右边和下面超出被裁】。
+				//
+				//   因此：直接设 scale（明确的缩放因子，与 frameWidth 无关），
+				//   再手动 updateHitbox() 让 width/height/offset 与新 scale 同步。
+				vs.scale.set(sc, sc);
 				vs.updateHitbox();
-				// ★ 顺序很重要：updateHitbox() 会按 frame 重算 offset/size，
-				//   所以 x/y 必须放在它【之后】设，否则会被覆盖。
 				vs.x = (viewW - vs.width) / 2;
 				vs.y = (viewH - vs.height) / 2;
 				vs.scrollFactor.set(0, 0);
 
-				// [PE-iOS] 诊断：把整条坐标链打出来，定位「intro 偏右」。
+				// [PE-iOS] 诊断：把整条坐标链打出来，定位「偏右 / 被裁」。
 				try
 				{
 					var s:String = '[introCoord] bmd=' + bmd.width + 'x' + bmd.height
 						+ ' view=' + Std.string(viewW) + 'x' + Std.string(viewH)
-						+ ' scale=' + Std.string(scale)
+						+ ' sc=' + Std.string(sc)
+						+ ' frame=' + vs.frameWidth + 'x' + vs.frameHeight
 						+ ' -> ' + Std.string(vs.width) + 'x' + Std.string(vs.height)
 						+ ' spr(' + Std.string(vs.x) + ',' + Std.string(vs.y) + ')'
 						+ ' FlxG=' + FlxG.width + 'x' + FlxG.height;
@@ -644,17 +648,17 @@ class TitleState extends MusicBeatState
 		// [PE-iOS] 同样改为「等比完整显示 + 显式居中」，与真视频路径保持一致。
 		//   原写法 setGraphicSize(FlxG.width, FlxG.width * 720/INTRO_W) 会把帧拉满宽度，
 		//   若帧的宽高比与 16:9 不同就会变形/溢出。
+		//   注：这里 loadGraphic() 刚刚调用过，frameWidth 已同步，
+		//   所以 setGraphicSize 其实也能用；但为和真视频路径统一（那里必须直接设
+		//   scale，见 startIntroRealVideo 的说明），这里也用 scale.set()。
 		{
 			var viewW:Float = FlxG.width;
 			var viewH:Float = FlxG.height;
 
 			var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 			if (sc <= 0 || sc != sc) sc = 1;
-			var tw:Int = Std.int(Math.max(1, bmd.width * sc));
-			var th:Int = Std.int(Math.max(1, bmd.height * sc));
-			introSpr.setGraphicSize(tw, th);
+			introSpr.scale.set(sc, sc);
 			introSpr.updateHitbox();
-			// x/y 必须在 updateHitbox() 之后设（否则被 offset 重算覆盖）
 			introSpr.x = (viewW - introSpr.width) / 2;
 			introSpr.y = (viewH - introSpr.height) / 2;
 		}

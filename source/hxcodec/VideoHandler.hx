@@ -229,37 +229,44 @@ class VideoHandler extends FlxSubState
 				}
 
 				// [PE-iOS] 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
-				//   之前用 Math.max 是「铺满画布」策略 —— 会把视频放大并裁掉边缘，
-				//   这就是用户反馈的「过场视频被放大」的直接原因。
+				//   之前用 Math.max 是「铺满画布」策略 —— 会把视频放大并裁掉边缘。
 				//   视频本来就该完整显示，宁可留黑边也不要放大。
-				//   注意：必须与 Main.hx 的 scaleVideoBitmaps() 保持一致（同为 Math.min）。
 				//
-				// ⚠ 关于居中：不要用 video.screenCenter()！
-				//   它按 sprite 的 width/height 与 FlxG.width/height 算，
-				//   而 setGraphicSize() 之后 hitbox/offset 可能未同步 ⇒ 算歪。
-				//   这里直接手动算，并且把 x/y 放在 updateHitbox() 【之后】。
+				// ★★★ 关键：不要用 video.setGraphicSize() ★★★
 				//
-				//   参照系用 FlxG.width/height：FlxVideoSprite 挂在某个相机上，
-				//   而相机【视口尺寸】恒等于 FlxG.width x FlxG.height（scaleMode 保证），
-				//   相机自身的黑边偏移在绘制时施加，与 sprite 坐标无关。
+				//   FlxSprite.setGraphicSize(W,H) 内部是：
+				//       scale.x = W / frameWidth;
+				//       scale.y = H / frameHeight;
+				//   —— 它【除以当前 frame 尺寸】来反推缩放比例。
+				//
+				//   FlxVideoSprite 的帧是由 hxvlc 在【它自己的】onFormatSetup 回调里
+				//   通过 loadGraphic(FlxGraphic.fromBitmapData(...)) 更新的。我们的回调
+				//   挂在同一个事件上，执行顺序取决于 add 顺序。若我们的先跑，
+				//   frameWidth 还是构造时 makeGraphic(1,1) 留下的 1：
+				//       scale.x = (1920 * 0.667) / 1 = 1280   ← 灾难性放大
+				//   就算 frame 更新过，只要与 bmd 不同步，scale 就是错的
+				//   ⇒ 视频被放大、锚点在左上角 ⇒ 【右边和下面超出被裁】。
+				//
+				//   因此：直接设 scale（明确的缩放因子，与 frameWidth 无关），
+				//   再 updateHitbox() 同步 width/height/offset。
+				//
+				// ⚠ 也不用 video.screenCenter()：它按 width/height 算，
+				//   而这些值要 updateHitbox() 之后才准。
 				var viewW:Float = FlxG.width;
 				var viewH:Float = FlxG.height;
 
 				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
-				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
-				var th:Int = Std.int(Math.max(1, bmd.height * scale));
-				video.setGraphicSize(tw, th);
+				video.scale.set(scale, scale);
 				video.updateHitbox();
-				// ★ 必须在 updateHitbox() 之后设坐标（否则被 offset 重算覆盖）
 				video.x = (viewW - video.width) / 2;
 				video.y = (viewH - video.height) / 2;
-				video.scrollFactor.set(0, 0);
 				video.scrollFactor.set(0, 0);
 				diag('[formatSetup] 居中：view=' + viewW + 'x' + viewH
 					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
 					+ ' xy=' + video.x + ',' + video.y);
-				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x
+				diag('[formatSetup] 缩放完成 frame=' + video.frameWidth + 'x' + video.frameHeight
+					+ ' scale=' + video.scale.x + ' -> ' + video.width + 'x' + video.height
 					+ ' xy=' + video.x + ',' + video.y
 					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y);
 
