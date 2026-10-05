@@ -161,7 +161,20 @@ class VideoHandler extends FlxSubState
 				{
 					diag('[formatSetup] 警告：尺寸过小，按原尺寸显示');
 					video.updateHitbox();
-					video.screenCenter();
+					// [PE-iOS] 同样不用 screenCenter（它按 FlxG 尺寸算，会偏）。
+					var tvW:Float = FlxG.width;
+					var tvH:Float = FlxG.height;
+					try
+					{
+						if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
+						{
+							tvW = video.cameras[0].width;
+							tvH = video.cameras[0].height;
+						}
+					}
+					catch (e:Dynamic) {}
+					video.x = (tvW - video.width) / 2;
+					video.y = (tvH - video.height) / 2;
 					video.scrollFactor.set(0, 0);
 					diagRawBitmap('tiny', video);
 					return;
@@ -172,14 +185,37 @@ class VideoHandler extends FlxSubState
 				//   这就是用户反馈的「过场视频被放大」的直接原因。
 				//   视频本来就该完整显示，宁可留黑边也不要放大。
 				//   注意：必须与 Main.hx 的 scaleVideoBitmaps() 保持一致（同为 Math.min）。
-				var scale:Float = Math.min(FlxG.width / bmd.width, FlxG.height / bmd.height);
+				//
+				// ⚠ 关于居中：不要用 video.screenCenter()！
+				//   它按 FlxG.width/height 居中，但本 sprite 挂在【某个具体相机】上
+				//   （见上面 camera 段落），相机视口未必等于 FlxG 的逻辑尺寸，
+				//   而且 RatioScaleMode 加的黑边偏移也不在其中 ⇒ 会整体偏右。
+				//   改为：用【该相机自己的视口尺寸】算缩放与居中。
+				var viewW:Float = FlxG.width;
+				var viewH:Float = FlxG.height;
+				try
+				{
+					if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
+					{
+						viewW = video.cameras[0].width;
+						viewH = video.cameras[0].height;
+					}
+				}
+				catch (e:Dynamic) {}
+
+				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
 				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
 				var th:Int = Std.int(Math.max(1, bmd.height * scale));
 				video.setGraphicSize(tw, th);
 				video.updateHitbox();
-				video.screenCenter();
+				// 显式居中到相机视口（不用 screenCenter，避免它按 FlxG 尺寸算）
+				video.x = (viewW - tw) / 2;
+				video.y = (viewH - th) / 2;
 				video.scrollFactor.set(0, 0);
+				diag('[formatSetup] 居中：view=' + viewW + 'x' + viewH
+					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
+					+ ' xy=' + video.x + ',' + video.y);
 				diag('[formatSetup] 缩放完成 size=' + tw + 'x' + th + ' scale=' + video.scale.x
 					+ ' xy=' + video.x + ',' + video.y
 					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y);

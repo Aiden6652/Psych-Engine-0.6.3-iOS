@@ -507,11 +507,37 @@ class TitleState extends MusicBeatState
 				if (vs.bitmap == null) return;
 				var bmd = vs.bitmap.bitmapData;
 				if (bmd == null) return;
-				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
-				if (scale <= 0) scale = 1;
-				vs.setGraphicSize(Std.int(Math.max(1, bmd.width * scale)), Std.int(Math.max(1, bmd.height * scale)));
+
+				// [PE-iOS] ★ 修「片头视频太靠右 / 右边被切」★
+				// 原写法两处问题：
+				//   1) Math.max(...) —— 铺满策略，视频被放大到超出屏幕两侧 ⇒ 边缘被裁
+				//      （视觉上「太靠右」，其实是左右都超，右侧更明显）
+				//   2) vs.screenCenter() —— 按 FlxG.width/height 居中，
+				//      没有考虑 RatioScaleMode 的黑边偏移，也不等于本相机视口
+				//      ⇒ 整体偏移
+				//
+				// 改为：等比缩小到「完整放得下」（Math.min）+ 按相机视口显式居中。
+				var viewW:Float = FlxG.width;
+				var viewH:Float = FlxG.height;
+				try
+				{
+					if (vs.cameras != null && vs.cameras.length > 0 && vs.cameras[0] != null)
+					{
+						viewW = vs.cameras[0].width;
+						viewH = vs.cameras[0].height;
+					}
+				}
+				catch (e:Dynamic) {}
+
+				var scale:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
+				if (scale <= 0 || scale != scale) scale = 1;
+				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
+				var th:Int = Std.int(Math.max(1, bmd.height * scale));
+				vs.setGraphicSize(tw, th);
 				vs.updateHitbox();
-				vs.screenCenter();
+				// 显式居中（不用 screenCenter，避免它按 FlxG 尺寸算）
+				vs.x = (viewW - tw) / 2;
+				vs.y = (viewH - th) / 2;
 			});
 			vs.bitmap.onEndReached.add(endIntroVideo);
 		}
@@ -568,9 +594,31 @@ class TitleState extends MusicBeatState
 		introGfx = FlxGraphic.fromBitmapData(bmd, true, null, false);
 		introGfx.persist = false;
 		introSpr.loadGraphic(introGfx);
-		introSpr.setGraphicSize(FlxG.width, Std.int(FlxG.width * (720.0 / INTRO_W)));
-		introSpr.updateHitbox();
-		introSpr.screenCenter();
+		// [PE-iOS] 同样改为「等比完整显示 + 显式居中」，与真视频路径保持一致。
+		//   原写法 setGraphicSize(FlxG.width, FlxG.width * 720/INTRO_W) 会把帧拉满宽度，
+		//   若帧的宽高比与 16:9 不同就会变形/溢出。
+		{
+			var viewW:Float = FlxG.width;
+			var viewH:Float = FlxG.height;
+			try
+			{
+				if (introSpr.cameras != null && introSpr.cameras.length > 0 && introSpr.cameras[0] != null)
+				{
+					viewW = introSpr.cameras[0].width;
+					viewH = introSpr.cameras[0].height;
+				}
+			}
+			catch (e:Dynamic) {}
+
+			var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
+			if (sc <= 0 || sc != sc) sc = 1;
+			var tw:Int = Std.int(Math.max(1, bmd.width * sc));
+			var th:Int = Std.int(Math.max(1, bmd.height * sc));
+			introSpr.setGraphicSize(tw, th);
+			introSpr.updateHitbox();
+			introSpr.x = (viewW - tw) / 2;
+			introSpr.y = (viewH - th) / 2;
+		}
 		if (old != null) old.destroy();
 		#end
 	}

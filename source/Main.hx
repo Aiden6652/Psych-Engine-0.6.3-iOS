@@ -214,12 +214,46 @@ class Main extends Sprite
 					? Math.min(FlxG.width / w, FlxG.height / h)
 					: Math.max(FlxG.width / w, FlxG.height / h);
 				if (sc <= 0 || sc != sc) sc = 1;
+
+				// [PE-iOS] 水平居中要按【父容器实际宽度】来算，不能用 FlxG.width。
+				//   原因：这个 Bitmap 是挂在 FlxG.game 上、随它一起被缩放的。
+				//   FlxG.game 被 RatioScaleMode 处理过（scale + 居中偏移），
+				//   子节点坐标要按父容器的坐标系填，否则会整体偏移。
+				//   之前直接用 FlxG.width(1280) 居中 ⇒ 若父容器实际宽度不是 1280，
+				//   视频就会整体偏右/偏左 ⇒ 正是「太靠右、右边被切」的原因。
+				var parentW:Float = FlxG.width;
+				var parentH:Float = FlxG.height;
+				try
+				{
+					var p:Dynamic = Reflect.getProperty(c, 'parent');
+					if (p != null)
+					{
+						var pw:Dynamic = Reflect.getProperty(p, 'width');
+						var ph:Dynamic = Reflect.getProperty(p, 'height');
+						if (pw != null && pw > 1) parentW = pw;
+						if (ph != null && ph > 1) parentH = ph;
+					}
+				}
+				catch (e:Dynamic) {}
+
+				// 用父容器宽高重新算缩放与居中（父容器比例与画布不一致时也能正确居中）
+				sc = PEI_VIDEO_FIT_INSIDE
+					? Math.min(parentW / w, parentH / h)
+					: Math.max(parentW / w, parentH / h);
+				if (sc <= 0 || sc != sc) sc = 1;
+
+				var posX:Float = (parentW - w * sc) / 2;
+				var posY:Float = (parentH - h * sc) / 2;
+
 				Reflect.setProperty(c, 'scaleX', sc);
 				Reflect.setProperty(c, 'scaleY', sc);
-				Reflect.setProperty(c, 'x', (FlxG.width - w * sc) / 2);
-				Reflect.setProperty(c, 'y', (FlxG.height - h * sc) / 2);
+				Reflect.setProperty(c, 'x', posX);
+				Reflect.setProperty(c, 'y', posY);
 				report.add('[' + i + '] ' + cn + ' bmd=' + w + 'x' + h
+					+ ' parent=' + parentW + 'x' + parentH
+					+ ' FlxG=' + FlxG.width + 'x' + FlxG.height
 					+ ' -> visible=true scale=' + sc
+					+ ' pos=' + posX + ',' + posY
 					+ (PEI_VIDEO_FIT_INSIDE ? ' (min/等比完整)' : ' (max/铺满)') + '\n');
 			}
 			catch (e:Dynamic)
