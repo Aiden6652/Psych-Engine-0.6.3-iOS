@@ -84,6 +84,14 @@ class VideoHandler extends FlxSprite
 	 * 低于此值的一律视为误报。
 	 */
 	static inline var MIN_PLAY_SECONDS:Float = 2.5;
+
+	/**
+	 * [PE-iOS] 「结束事件已到、但还没到最小播放门槛」的挂起标记。
+	 *
+	 * onEndReached 在门槛前到达时置 true；update() 越过门槛后补收尾。
+	 * 见 onEndReached 绑定处的详细说明（bug A / bug B）。
+	 */
+	private var pendingEnd:Bool = false;
 	/** [PE-iOS] 视频 sprite 被挂到了哪个 state 上（收尾时要从它身上摘掉） */
 	private var hostState:flixel.FlxState = null;
 
@@ -307,12 +315,88 @@ class VideoHandler extends FlxSprite
 		//   intro 能正常出画面。把过场也交给「最后一个相机」就等于把它画到
 		//   另一个视口里 ⇒ 出画外 ⇒ **看着像黑屏**。
 		//
-		//   ⇒ 结论：不指定相机，与 intro 完全对齐。
-		//   （scrollFactor=0 已保证不受滚动影响；缩放居中在 onFormatSetup 里做。）
+		// ★★★ [PE-iOS] ★★★ 相机选择：视频要画在【最上层】相机上 ★★★
+		//
+		//   ── 现象 ────────────────────────────────────────────────────
+		//   用户实拍：过场视频播放时，【血条 / 箭头 / 角色仍盖在视频上面】。
+		//
+		//   ── 原因（PlayState 的相机结构）─────────────────────────────
+		//   PlayState.create() 里建了三个相机，并【按顺序 add】：
+		//       FlxG.cameras.reset(camGame);          // 第 1 个 → 画在最底层
+		//       FlxG.cameras.add(camHUD,  false);     // 第 2 个
+		//       FlxG.cameras.add(camOther, false);    // 第 3 个 → 画在最上层
+		//   而血条/箭头/分数全都 `cameras = [camHUD]`：
+		//       strumLineNotes.cameras = [camHUD];
+		//       notes.cameras         = [camHUD];
+		//       healthBar.cameras     = [camHUD];
+		//   绘制层级 = 相机被 add 的顺序，后 add 的盖在前者之上
+		//   ⇒ camHUD 永远盖在 camGame 之上。
+		//
+		//   而我们把视频挂在 FlxG.state 上、没指定相机 ⇒ 它走【默认相机】
+		//   （camGame）⇒ 自然被 camHUD 里的血条/箭头盖住。这是引擎结构使然，
+		//   不是渲染 bug。
+		//
+		//   ── 修法 ────────────────────────────────────────────────────
+		//   把视频 sprite 挂到【最后一个相机】（即 camOther，层级最高），
+		//   这样过场视频就盖在包括 HUD 在内的一切之上。
+		//
+		//   ⚠ 早先版本曾因「把视频交给最后一个相机」而黑屏，但那是【另一个
+		//     原因】：当时本类还是 FlxSubState，且视频根本没能进入绘制链。
+		//     现在绘制链已验证通畅（画面能出），层级才是真正要解决的问题。
+		//   更稳的做法：优先找 camOther（按类名/变量名），找不到再用 list 末位。
+		var topCam:flixel.FlxCamera = null;
 		try
 		{
-			// 仅记录，不修改：便于日志确认默认相机是哪一个。
-			diag('[camera] 不指定相机（与 intro 对齐）；当前相机数=' + FlxG.cameras.list.length);
+			var host:flixel.FlxState = FlxG.state;
+			if (host != null)
+			{
+				// PlayState 上有个 public var camOther:FlxCamera —— 它就是最上层。
+				var co:Dynamic = null;
+				try { co = Reflect.field(host, 'camOther'); } catch (e:Dynamic) { co = null; }
+				if (co != null && Std.isOfType(co, flixel.FlxCamera)) topCam = cast co;
+			}
+		}
+		catch (e:Dynamic) { topCam = null; }
+
+		if (topCam == null)
+		{
+			// 兜底：取相机列表的最后一个（add 顺序最后 = 层级最高）。
+			try
+			{
+				var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
+				if (cams != null && cams.length > 0) topCam = cams[cams.length - 1];
+			}
+			catch (e:Dynamic) { topCam = null; }
+		}
+
+		if (topCam != null && video != null)
+		{
+			try
+			{
+				video.cameras = [topCam];
+				diag('[camera] 视频已指定最上层相机 camOther=' + (topCam == null ? 'null' : 'ok')
+					+ ' 视口=' + topCam.width + 'x' + topCam.height
+					+ ' bgAlpha=' + topCam.bgColor.alpha);
+			}
+			catch (e:Dynamic) { diag('[camera] 指定最上层相机失败: ' + e); }
+		}
+		else
+		{
+			diag('[camera] 未找到最上层相机，视频走默认相机');
+		}
+
+		try
+		{
+			// 记录相机列表全貌，便于核对层级与视口。
+			var desc:String = '';
+			var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
+			for (i in 0...cams.length)
+			{
+				if (cams[i] == null) continue;
+				desc += ' #' + i + '(' + cams[i].width + 'x' + cams[i].height
+					+ ',bg=' + cams[i].bgColor.alpha + ')';
+			}
+			diag('[camera] 相机列表（add 顺序=层级，后者盖前者）:' + desc);
 		}
 		catch (e:Dynamic) {}
 
@@ -438,12 +522,29 @@ class VideoHandler extends FlxSprite
 				//   所以视频自己的逻辑尺寸必须是【游戏逻辑尺寸 1280x720】，
 				//   而不是相机视口尺寸 —— 后者小于前者时就会「没铺满」。
 				//
-				//   ⚠ 历史教训：早先改成相机视口，是因为看到「同一 bmd 两次算出
-				//     0.667 / 0.782 两个 scale」，怀疑 FlxG.width 不稳。
-				//     现在 update() 里已经有【每帧矫正】，会持续把 scale 拉回正确值，
-				//     所以这里可以放心用 FlxG.width/height（1280x720 是确定的）。
+				//   ⚠ 历史上在「相机视口」和「FlxG.width」之间来回改过，
+				//     因为两者都各有过偏差。现在的策略：
+				//       【优先用视频自己挂的那个相机的视口】——
+				//       因为视频最终是「由那个相机绘制、并被拉伸到该相机视口」的，
+				//       用它做基准天然一致；只有拿不到相机时才退回 FlxG。
+				//     并且 scale 在 update() 里每帧校正，偏差会被自动收敛。
 				var viewW:Float = FlxG.width;
 				var viewH:Float = FlxG.height;
+
+				// 优先：视频挂载的相机视口
+				try
+				{
+					if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
+					{
+						if (video.cameras[0].width > 0 && video.cameras[0].height > 0)
+						{
+							viewW = video.cameras[0].width;
+							viewH = video.cameras[0].height;
+						}
+					}
+				}
+				catch (e:Dynamic) {}
+
 				if (viewW <= 0 || viewH <= 0)
 				{
 					viewW = FlxG.initialWidth;
@@ -511,27 +612,33 @@ class VideoHandler extends FlxSprite
 				diagRawBitmap('afterFormat', video);
 				diagCoords('afterFormat', video);
 			});
-			// ★★★ [PE-iOS] onEndReached 必须加「最小播放时长」守卫 ★★★
+			// ★★★ [PE-iOS] onEndReached 守卫：「过早的结束事件」要【记下来】，
+			//     不能直接丢掉 ★★★
 			//
-			//   现象：过场动画只播 1 秒就被收尾（intro 早就修了，这里漏了）。
-			//   原因：iOS 上 hxvlc 会在【加载 / 格式化阶段】就误派发一次
-			//   onEndReached（或在视频还没真正跑起来时派发）。原实现是
-			//   直接 `.add(onVideoFinished)` —— 于是 playElapsed 才 1 秒就收尾。
+			//   ── 背景（两个 bug 的夹击）──────────────────────────────────
+			//   bug A「过场只播 1 秒」：
+			//     iOS 上 hxvlc 会在【加载 / 格式化阶段】就误派发一次 onEndReached。
+			//     若直接 `.add(onVideoFinished)`，playElapsed 才 1 秒就收尾。
+			//     ⇒ 所以要加最小播放时长门槛。
 			//
-			//   intro 那边（TitleState）早就用 MIN_INTRO_SECONDS(2.5s) 挡掉了，
-			//   兼容层这条路径当时没同步 ⇒ 就是「过场只播 1 秒」的真凶。
+			//   bug B「播完卡住」（本次修）：
+			//     上一版的门槛写法是「过早的结束事件直接 return 丢掉」。
+			//     但如果【真正的】结束事件也早于门槛到达（例如视频本身较短、
+			//     或 iOS 上事件整体提前），那这次事件被丢掉后【不会再来了】，
+			//     onVideoFinished 永不执行 ⇒ 卡死在过场画面。
 			//
-			//   守卫逻辑：
-			//     · 播放不足门槛的 onEndReached 一律忽略（等真正播完）；
-			//     · 超过门槛才认为是真的播完，收尾。
-			//   onVideoFinished() 自带 `if (ended) return;` 去重，安全。
+			//   ── 正确做法 ───────────────────────────────────────────────
+			//     过早的结束事件不丢弃，只【挂起】：置 pendingEnd = true。
+			//     update() 里当 playElapsed 越过门槛后，立刻补收尾。
+			//     这样既不会被误报的早事件打断（bug A），也不会漏掉真事件（bug B）。
 			video.bitmap.onEndReached.add(function():Void
 			{
 				if (!playing) return;
 				if (playElapsed < MIN_PLAY_SECONDS)
 				{
-					diag('[onEndReached] 忽略过早的结束事件（playElapsed=' + playElapsed
-						+ ' < ' + MIN_PLAY_SECONDS + '）');
+					diag('[onEndReached] 结束事件早于门槛（playElapsed=' + playElapsed
+						+ ' < ' + MIN_PLAY_SECONDS + '）→ 挂起，待越过门槛后收尾');
+					pendingEnd = true;
 					return;
 				}
 				onVideoFinished();
@@ -780,17 +887,34 @@ class VideoHandler extends FlxSprite
 			if (!video.visible) video.visible = true;
 			if (!video.exists) video.exists = true;
 
-			// 坐标/缩放矫正：以【游戏窗口逻辑尺寸 FlxG.width/height】为基准重新居中。
+			// 坐标/缩放矫正：以【视频所挂相机的视口】为基准重新居中。
 			// 只在尺寸有效时做，避免每帧抖动。
 			try
 			{
 				var bmd = video.bitmap != null ? video.bitmap.bitmapData : null;
 				if (bmd != null && bmd.width > 1 && bmd.height > 1)
 				{
-					// ★ 基准与 onFormatSetup 保持一致：用游戏窗口逻辑尺寸 FlxG.width/height。
-					//   （不能用相机视口 —— 那会让视频只填满相机那一条，表现为「没铺满」。）
-					var viewW:Float = FlxG.width;
-					var viewH:Float = FlxG.height;
+					// ★ 基准与 onFormatSetup 保持一致（同一套优先级）：
+					//   1) 视频挂载相机的视口   2) FlxG.width/height
+					var viewW:Float = 0;
+					var viewH:Float = 0;
+					try
+					{
+						if (video.cameras != null && video.cameras.length > 0 && video.cameras[0] != null)
+						{
+							if (video.cameras[0].width > 0 && video.cameras[0].height > 0)
+							{
+								viewW = video.cameras[0].width;
+								viewH = video.cameras[0].height;
+							}
+						}
+					}
+					catch (e:Dynamic) {}
+					if (viewW <= 0 || viewH <= 0)
+					{
+						viewW = FlxG.width;
+						viewH = FlxG.height;
+					}
 					if (viewW <= 0 || viewH <= 0)
 					{
 						viewW = FlxG.initialWidth;
@@ -832,6 +956,16 @@ class VideoHandler extends FlxSprite
 			//   —— 这正是「只播 1s」的另一条路径。
 			//   所以：只有 videoDurSec >= MIN_PLAY_SECONDS 才认为时长可信。
 			playElapsed += elapsed;
+
+			// ① 挂起的结束事件：一旦越过门槛，立刻补收尾。
+			//    （见 onEndReached 绑定处 bug A / bug B 的说明）
+			if (pendingEnd && playElapsed >= MIN_PLAY_SECONDS)
+			{
+				diag('[PE-iOS] 补收尾：挂起的结束事件已越过门槛（elapsed=' + playElapsed + '）');
+				onVideoFinished();
+				return;
+			}
+
 			var durUsable:Bool = (videoDurSec >= MIN_PLAY_SECONDS);
 			if (durUsable && playElapsed > videoDurSec + 2.0)
 			{
@@ -840,8 +974,11 @@ class VideoHandler extends FlxSprite
 				onVideoFinished();
 				return;
 			}
-			else if (!durUsable && playElapsed > 180.0)
+			else if (!durUsable && playElapsed > 30.0)
 			{
+				// 时长拿不到时的最终保险。
+				// ⚠ 原为 180 秒（3 分钟）—— 视频早已播完却要干等，用户看到的就是
+				//   「播完卡住」。降到 30 秒：既能容忍长片头，又不会让人觉得死住。
 				diag('[PE-iOS] 过场视频时长未知，硬超时兜底收尾 elapsed=' + playElapsed);
 				onVideoFinished();
 				return;
