@@ -227,7 +227,9 @@ class PlayState extends MusicBeatState
 	 *   `if (song == 'tutorial' && zoom != 1) tween zoom → 1`，
 	 *   替我们把 zoom 拉回了；【不覆盖原版周】的模组没有这段兜底 ⇒ 问题立即暴露。
 	 *
-	 * 本开关默认 true：只回中、不推近。
+	 * 本开关默认 true：只回中、不推近。**tutorial（原版周）自动排除**，
+	 * 保持上游原版行为不变（原版 tutorial 本来就不置 camZooming，镜头交给
+	 * moveCameraSection/tweenCamIn 的 tween 掌管）。
 	 * 想让相机【完全不干预】（连回中都不要，纯交给模组）：改为 false。
 	 */
 	static inline var PEI_CAMZOOM_RECENTER:Bool = true;
@@ -3163,7 +3165,17 @@ class PlayState extends MusicBeatState
 		//   · 回中永远生效 —— camHUD.zoom → 1、FlxG.camera.zoom → defaultCamZoom。
 		//     这是模组事件的「泄压阀」，保证缩放不会累积。
 		//   · 是否允许【引擎自动推近】仍由 PEI_AUTO_CAMZOOM 控制（默认关）。
-		if (camZooming || PEI_CAMZOOM_RECENTER)
+		//
+		// ⚠ tutorial 例外（必须保留，否则会改变原版周的手感）：
+		//   上游原版在 opponentNoteHit 里就带了 `!= 'tutorial'`，即 tutorial 关卡
+		//   【从来不置 camZooming】⇒ 这条 lerp 在原版 tutorial 里从不执行。
+		//   tutorial 自己用 moveCameraSection()/tweenCamIn() 里的
+		//     `tween camera.zoom → 1 / 1.3`
+		//   来掌控镜头。若我们让 lerp 在 tutorial 也生效，两套逻辑会互相拉扯。
+		//   ⇒ 这里显式排除 tutorial，保持原版周完全不变。
+		var peRecenterOK:Bool = PEI_CAMZOOM_RECENTER
+			&& Paths.formatToSongPath(SONG.song) != 'tutorial';
+		if (camZooming || peRecenterOK)
 		{
 			FlxG.camera.zoom = FlxMath.lerp(defaultCamZoom, FlxG.camera.zoom, CoolUtil.boundTo(1 - (elapsed * 3.125 * camZoomingDecay * playbackRate), 0, 1));
 			camHUD.zoom = FlxMath.lerp(1, camHUD.zoom, CoolUtil.boundTo(1 - (elapsed * 3.125 * camZoomingDecay * playbackRate), 0, 1));
