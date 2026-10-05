@@ -262,11 +262,6 @@ class VideoHandler extends FlxSprite
 		}
 		catch (e:Dynamic) {}
 
-		add(video);
-		diag('[create] FlxVideoSprite 已创建 bitmap=' + (video.bitmap == null ? 'null' : 'ok')
-			+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
-			+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length));
-
 		// ★★★ [PE-iOS] ★★★ 关键：复刻 intro 的挂载方式 ★★★
 		//
 		//   intro 稳，是因为它在 FlxState 里 `add(vs)` —— 视频 sprite 成为
@@ -300,9 +295,18 @@ class VideoHandler extends FlxSprite
 		}
 		else
 		{
-			diag('[mount] FlxG.state 为 null！只能挂在自己身上');
-			add(video);
+			// 极端兜底：FlxG.state 都取不到（几乎不可能）。
+			// ⚠ 不能用 add(video) —— 本类继承 FlxSprite，没有 add()。
+			//   注意：不要再 addChild(video.bitmap) —— FlxVideoSprite 构造时
+			//   已经把它 addChild 到 FlxG.game 了，重复添加会报警/异常。
+			//   这里只把整个 video sprite 挂上去即可。
+			diag('[mount] FlxG.state 为 null！改用 FlxG.game 兜底挂载');
+			try { FlxG.game.addChild(video); } catch (e:Dynamic) { diag('[mount] FlxG.game 兜底失败: ' + e); }
 		}
+
+		diag('[create] FlxVideoSprite 已创建 bitmap=' + (video.bitmap == null ? 'null' : 'ok')
+			+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
+			+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length));
 
 		if (video.bitmap != null)
 		{
@@ -585,9 +589,8 @@ class VideoHandler extends FlxSprite
 			{
 				diag('[autoFallback] ★ FlxSprite 正路异常 → 打开内层 Bitmap 兜底（画面可能偏右/被裁）');
 				try { video.bitmap.visible = true; } catch (e:Dynamic) {}
-				#if (VIDEOS_ALLOWED && ios)
-				hxcodec.VideoHandler.PEI_VIDEO_FALLBACK_ACTIVE = true;
-				#end
+				// 置静态标记，让 Main.hx 的每 12 帧扫描停手（避免反复横跳闪烁）
+				VideoHandler.PEI_VIDEO_FALLBACK_ACTIVE = true;
 			}
 			else
 			{
