@@ -109,6 +109,56 @@ class VideoHandler extends FlxSubState
 			+ ' flixVisible=' + v.visible + ' flixAlpha=' + v.alpha);
 	}
 
+	/**
+	 * [PE-iOS] 全坐标系快照 —— 用于定位「视频偏右 / 不居中」。
+	 *
+	 * 偏右这件事，根因只可能在下列几种坐标系之一，所以一次性全打出来：
+	 *   1) sprite 自己的 x/y/width/height/scale/offset（相对相机视口）
+	 *   2) sprite 所属相机的 x/y/width/height/scroll（视口与滚动）
+	 *   3) FlxG.width/height（逻辑画布）
+	 *   4) FlxG.game.x/y/scaleX/scaleY（RatioScaleMode 施加的偏移与缩放）
+	 *   5) 内层 Bitmap 的 x/y/width/height/scale（直显路径才相关）
+	 *   对比 (1) 与 (3)：若 sprite.x == 0 但画面仍偏右，问题在 (2) 或 (4)。
+	 */
+	static function diagCoords(tag:String, v:FlxVideoSprite):Void
+	{
+		if (v == null) { diag('[coord:' + tag + '] video=null'); return; }
+		try
+		{
+			var s:String = '[coord:' + tag + ']'
+				+ ' spr(x=' + v.x + ',y=' + v.y + ',w=' + v.width + ',h=' + v.height
+				+ ',sx=' + v.scaleX + ',sy=' + v.scaleY
+				+ ',ox=' + v.offset.x + ',oy=' + v.offset.y + ')'
+				+ ' FlxG(' + FlxG.width + 'x' + FlxG.height + ')';
+
+			var g:Dynamic = FlxG.game;
+			if (g != null)
+			{
+				s += ' game(x=' + Reflect.getProperty(g, 'x') + ',y=' + Reflect.getProperty(g, 'y')
+					+ ',sx=' + Reflect.getProperty(g, 'scaleX')
+					+ ',sy=' + Reflect.getProperty(g, 'scaleY') + ')';
+			}
+
+			if (v.cameras != null && v.cameras.length > 0 && v.cameras[0] != null)
+			{
+				var c = v.cameras[0];
+				s += ' cam(x=' + c.x + ',y=' + c.y + ',w=' + c.width + ',h=' + c.height
+					+ ',zoom=' + c.zoom + ',scroll=' + c.scroll.x + ',' + c.scroll.y + ')';
+			}
+			else s += ' cam(无)';
+
+			if (v.bitmap != null)
+			{
+				var b = v.bitmap;
+				s += ' bmp(x=' + b.x + ',y=' + b.y + ',w=' + b.width + ',h=' + b.height
+					+ ',sx=' + b.scaleX + ',sy=' + b.scaleY + ',vis=' + b.visible + ')';
+			}
+
+			diag(s);
+		}
+		catch (e:Dynamic) { diag('[coord:' + tag + '] 快照失败: ' + e); }
+	}
+
 	/** 播放一个视频。path 可以是绝对路径，也可以是相对游戏目录的路径。 */
 	public function playVideo(path:String, ?shouldLoop:Bool = false, ?canSkipIt:Bool = true):Void
 	{
@@ -209,6 +259,7 @@ class VideoHandler extends FlxSubState
 					+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y);
 
 				diagRawBitmap('afterFormat', video);
+				diagCoords('afterFormat', video);
 			});
 			video.bitmap.onEndReached.add(onVideoFinished);
 			// [PE-iOS] 记录时长。
@@ -268,9 +319,15 @@ class VideoHandler extends FlxSubState
 		// ★ 不依赖 update() 的定时快照：0.5s / 1.5s / 3s 各记一次原始 Bitmap 状态。
 		// 之前只靠 update() 记录，结果一行 [state] 都没写出来（说明 update 没被驱动），
 		// 所以改成定时器，确保一定能拿到数据。
-		new FlxTimer().start(0.5, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t0.5', video); });
-		new FlxTimer().start(1.5, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t1.5', video); });
-		new FlxTimer().start(3.0, function(_:FlxTimer) { if (playing && video != null) diagRawBitmap('t3.0', video); });
+		new FlxTimer().start(0.5, function(_:FlxTimer) {
+			if (playing && video != null) { diagRawBitmap('t0.5', video); diagCoords('t0.5', video); }
+		});
+		new FlxTimer().start(1.5, function(_:FlxTimer) {
+			if (playing && video != null) { diagRawBitmap('t1.5', video); diagCoords('t1.5', video); }
+		});
+		new FlxTimer().start(3.0, function(_:FlxTimer) {
+			if (playing && video != null) { diagRawBitmap('t3.0', video); diagCoords('t3.0', video); }
+		});
 
 		new FlxTimer().start(0.5, function(_:FlxTimer) canSkipNow = true);
 	}

@@ -536,6 +536,34 @@ class TitleState extends MusicBeatState
 				vs.x = (viewW - vs.width) / 2;
 				vs.y = (viewH - vs.height) / 2;
 				vs.scrollFactor.set(0, 0);
+
+				// [PE-iOS] 诊断：把整条坐标链打出来，定位「intro 偏右」。
+				try
+				{
+					var s:String = '[introCoord] bmd=' + bmd.width + 'x' + bmd.height
+						+ ' view=' + viewW + 'x' + viewH
+						+ ' scale=' + scale + ' -> ' + vs.width + 'x' + vs.height
+						+ ' spr(' + vs.x + ',' + vs.y + ')'
+						+ ' FlxG=' + FlxG.width + 'x' + FlxG.height;
+					var g:Dynamic = FlxG.game;
+					if (g != null)
+						s += ' game(' + Reflect.getProperty(g, 'x') + ',' + Reflect.getProperty(g, 'y')
+							+ ' s=' + Reflect.getProperty(g, 'scaleX') + ')';
+					if (vs.cameras != null && vs.cameras.length > 0 && vs.cameras[0] != null)
+					{
+						var c = vs.cameras[0];
+						s += ' cam(' + c.x + ',' + c.y + ' ' + c.width + 'x' + c.height
+							+ ' z=' + c.zoom + ' sc=' + c.scroll.x + ',' + c.scroll.y + ')';
+					}
+					if (vs.bitmap != null)
+					{
+						var b = vs.bitmap;
+						s += ' bmp(' + b.x + ',' + b.y + ' ' + b.width + 'x' + b.height
+							+ ' s=' + b.scaleX + ' v=' + b.visible + ')';
+					}
+					File.saveContent(SUtil.getPath() + 'pe_ios_intro.txt', s + '\n');
+				}
+				catch (e:Dynamic) {}
 			});
 			vs.bitmap.onEndReached.add(endIntroVideo);
 			// [PE-iOS] 记录视频时长。

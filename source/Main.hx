@@ -75,14 +75,32 @@ class Main extends Sprite
 	static inline var PEI_USE_GPU_TEXTURE_PATH:Bool = true;
 
 	/**
-	 * [PE-iOS] 视频缩放到「完整放得下」还是「铺满」——【已废弃，仅作历史保留】。
+	 * [PE-iOS] ★ 视频显隐兜底：是否把 hxvlc 内部那个原始 Bitmap 强制设为 visible。
 	 *
-	 * 原本它控制 Main.hx 兜底扫描的缩放策略。该扫描的缩放/居中逻辑已【全部删除】
-	 * （见 ensureVideoBitmapVisible() 顶部说明：缩放归 VideoHandler / TitleState 管），
-	 * 所以本开关**当前不起任何作用**。保留它只是为了少改一处、便于回溯。
+	 * ── 背景 ──────────────────────────────────────────────────────────
+	 * hxvlc 把视频帧写进一个 `openfl.display.Bitmap`，并 addChild 到 `FlxG.game`，
+	 * 但它【默认 visible=false】—— 正常的显示路径是让 `FlxSprite` 从它的
+	 * `bitmapData` 里「中转」出来，通过相机绘制。
+	 *
+	 * 早期某些版本「有声音、没画面」，当时的兜底就是把它强行 visible=true，
+	 * 于是由 OpenFL 直接绘制这个 Bitmap（libVLC 官方示例即此做法）。
+	 *
+	 * ── 但这么做有个严重副作用（「视频偏右」的真凶）──────────────────
+	 * 这个 Bitmap 是 `FlxG.game` 的【直接子节点】，而 `FlxG.game` 会被
+	 * `BaseScaleMode.updateGamePosition()` 平移：
+	 *     FlxG.game.x = offset.x = Math.ceil((deviceSize.x - gameSize.x) * 0.5)
+	 * 即它承载着「黑边偏移」。Bitmap 跟着一起右移 ⇒ 屏幕上那个视频偏右。
+	 *
+	 * 与此同时，`FlxSprite` 正路（挂在相机上）坐标系是独立的、居中的，
+	 * 于是屏幕上会出现【两个视频叠加】：一个正确居中、一个偏右。
+	 * 看起来就是「偏右 / 像有两层影子」。
+	 *
+	 * ── 结论 ──────────────────────────────────────────────────────────
+	 * **正路已经能出画面时，这个兜底必须【关闭】**（默认 false）。
+	 * 若关掉后出现「有声音没画面」（说明正路在你那台设备上确实不通），
+	 * 再改回 true —— 那时画面会偏右，但至少能看，属于两害相权。
 	 */
-	@:deprecated
-	static inline var PEI_VIDEO_FIT_INSIDE:Bool = true;
+	static inline var PEI_VIDEO_VISIBLE_FALLBACK:Bool = false;
 
 	// ==================== [PE-iOS] 画布定义 ====================
 	// width/height 恒为 1280x720（16:9）—— 这是全局唯一真相源：
@@ -135,29 +153,24 @@ class Main extends Sprite
 		setupGame();
 	}
 
-	// ==================== [PE-iOS] 视频 Bitmap 可见性兜底（只做这一件事）====================
+	// ==================== [PE-iOS] 视频 Bitmap 显隐兜底（默认关闭）====================
+	//
+	// 【为什么默认关闭 —— 「视频偏右」的真凶】
+	//   这个 Bitmap 是 `FlxG.game` 的【直接子节点】，而 `FlxG.game` 会被
+	//   `BaseScaleMode.updateGamePosition()` 平移：
+	//       FlxG.game.x = offset.x = ceil((deviceSize.x - gameSize.x) * 0.5)
+	//   即它带着「黑边偏移」。所以把它 visible=true 之后，它绘制出来必然偏右。
+	//   而 `FlxSprite` 正路（挂相机）坐标系独立且居中 ⇒ 两个视频叠加，
+	//   看到的就是「偏右」。详见 PEI_VIDEO_VISIBLE_FALLBACK 的注释。
 	//
 	// 【历史教训 —— 别再往这里加缩放/坐标逻辑】
-	//   35a1af5 曾在这里「顺便」做等比缩放 + 居中，后续版本又叠加了
-	//   「按父容器宽高重新算”——结果是每 12 帧把 VideoHandler / TitleState
-	//   辛苦算好的 scale 与坐标全部推翻一次，两套逻辑互相打架，表现为：
-	//     · 视频「一直放大」（父容器 FlxG.game 已含 RatioScaleMode 的缩放，
-	//       再乘一次 ⇒ 缩放叠缩放）
-	//     · 视频「偏右 / 右边被切」（坐标系错配）
-	//     · 播放结束「卡住」 （属性被反复改写，onEndReached 链路受扰）
-	//
-	// 【现在的职责边界】
-	//   本函数只负责把 hxvlc 内部那个 Bitmap 设为可见。**不碰 scale、不碰 x/y。**
-	//   缩放与居中一律由 VideoHandler.hx / TitleState.hx（官方正规路径）负责，
-	//   它们自己用所属相机的视口算，本来就正确。
-	//
-	//   为什么还需要 visible=true：hxvlc 把帧写进 openfl.display.Bitmap 并
-	//   addChild 到 FlxG.game，但【默认 visible=false】，正常靠 FlxSprite
-	//   从它的 bitmapData 中转显示；当该中转链路在过场场景失效时就会
-	//   有声音没画面。设一次 visible 即可，无需每帧重复。
+	//   35a1af5 曾在这里「顺便」做等比缩放 + 居中，后续又叠加「按父容器重算」，
+	//   结果每 12 帧把正规路径算好的 scale 与坐标全部推翻一次，表现为
+	//   「一直放大」「偏右」「播完卡住」。现在这里【只做显隐】，不碰 scale/x/y。
 	private function ensureVideoBitmapVisible():Void
 	{
 		#if (VIDEOS_ALLOWED && ios)
+		if (!PEI_VIDEO_VISIBLE_FALLBACK) return;   // ★ 默认关闭：走正路
 		var g = FlxG.game;
 		if (g == null) return;
 
