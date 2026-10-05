@@ -2,7 +2,8 @@ package hxcodec;
 
 #if (VIDEOS_ALLOWED && (ios || android))
 import flixel.FlxG;
-import flixel.FlxSubState;
+import flixel.FlxSprite;
+import flixel.FlxState;
 import flixel.util.FlxTimer;
 import hxvlc.flixel.FlxVideoSprite;
 import sys.FileSystem;
@@ -14,21 +15,34 @@ import sys.io.File;
  * ── 定位：这是一层「翻译器」，不是一套独立实现 ──────────────────────────
  * 老模组调用的是 hxCodec 的 API，契约极简（三个动作）：
  *
- *     var video = new MP4Handler();        // ① 造对象（无参构造 = FlxSubState）
- *     video.playVideo(filepath);           // ② 播放 —— 【内部会 openSubState(this)】
+ *     var video = new MP4Handler();        // ① 造对象（无参构造）
+ *     video.playVideo(filepath);           // ② 播放（画面从这一刻开始出）
  *     video.finishCallback = function(){}; // ③ 播完回调
  *
- * 模组【不会】自己 addChild / openSubState —— 打开动作必须由 playVideo() 完成。
+ * 模组【不会】自己 addChild / openSubState —— 挂载必须由 playVideo() 完成。
  * 本层把这些调用翻译成 hxvlc 的 `FlxVideoSprite` 操作，接口保持与 hxCodec 一致，
  * 这样任何模组都不用改代码。
+ *
+ * ── ★★ 本版架构（彻底换掉 substate 方案）★★ ─────────────────────────
+ *
+ *   【旧方案失败】本类曾是 `FlxSubState`，需要 `openSubState(this)` 才能进
+ *   FlxG 的更新/绘制链。实测在本项目里这条路反复失败（不进链 ⇒ 黑屏 +
+ *   不回调 + 不更新），是过场黑屏折腾 7+ 轮的真正原因。
+ *
+ *   【新方案：复刻 intro】intro 之所以一直稳，是因为它的写法极简且正确：
+ *       var vs = new FlxVideoSprite();
+ *       add(vs);                       // ← 挂在 FlxState 上，被正常绘制
+ *   所以现在：
+ *     · 本类 = 不可见的 `FlxSprite`【控制器】（拿回调、计时、跳过），
+ *     · 真正的视频 sprite 由 `playVideo()` 直接 `FlxG.state.add(video)`，
+ *       与 intro 完全同一种挂法，不再依赖 substate 机制。
  *
  * ⚠ hxvlc 版本要求：**1.9.3**
  *   1.7/1.8.x 没有 GPU 渲染路径（视频帧出不来），
  *   1.9.4+ 又用了 Haxe 4.3 的 `?.` 语法（本仓库 Haxe 4.2.4 编不过）。
  *
  * ── 已修掉的坑（全部有日志/源码依据）────────────────────────────────────
- *   ① 【黑屏】playVideo() 从未 openSubState(this) ⇒ substate 不进更新/绘制链。
- *      现已补上（含 addChild 兜底）。
+ *   ① 【黑屏】旧 substate 方案从未真正进更新/绘制链 ⇒ 改为直接挂 FlxG.state。
  *   ② 【偏右/被裁】曾把 video.cameras 指定成 FlxG.cameras.list 的【最后一个】，
  *      那不是 camGame ⇒ 画到别的视口。现改为不指定，与 intro 对齐。
  *   ③ 【不居中】缩放基准曾用 FlxG.width（实测该值在回调触发时不稳定），
@@ -37,7 +51,7 @@ import sys.io.File;
  *      且要求 justPressed && pressed 双重确认。
  *   ⑤ 时长解析增加 Int64.low 兜底，避免 parseFloat 失败变 0 秒。
  */
-class VideoHandler extends FlxSubState
+class VideoHandler extends FlxSprite
 {
 	/** 播放结束（或被跳过）后的回调，老模组靠它继续剧情 */
 	public var finishCallback:Void->Void = null;
@@ -61,6 +75,8 @@ class VideoHandler extends FlxSubState
 	private var playElapsed:Float = 0;
 	/** [PE-iOS] 视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知 */
 	private var videoDurSec:Float = 0;
+	/** [PE-iOS] 视频 sprite 被挂到了哪个 state 上（收尾时要从它身上摘掉） */
+	private var hostState:flixel.FlxState = null;
 
 	/**
 	 * [PE-iOS] 自动兜底激活标记。
@@ -74,6 +90,22 @@ class VideoHandler extends FlxSubState
 	public function new():Void
 	{
 		super();
+
+		// ★★★ [PE-iOS] 本类【不再是 FlxSubState】，而是一个不可见的 FlxSprite 控制器 ★★★
+		//
+		//   为什么改：hxCodec 的契约要求 `new MP4Handler()` 后调 `playVideo()` 就能出画面，
+		//   而 substate 方案要求我们主动 openSubState(this) —— 那条路在本项目里
+		//   反复失败（substate 不进 FlxG 的更新/绘制链 ⇒ 黑屏）。
+		//
+		//   现改为【复刻 intro 的挂载方式】：intro 之所以稳，是因为它：
+		//       var vs = new FlxVideoSprite();
+		//       add(vs);            // ← 加在 FlxState 上，被正常绘制
+		//   所以这里也把真正的视频 sprite 直接挂到 FlxG.state（见 playVideo）。
+		//
+		//   本对象自己只是「控制器」：持有回调、计时、处理跳过，不参与绘制。
+		this.visible = false;          // 控制器本身不画
+		this.alpha = 0;
+		try { this.scrollFactor.set(0, 0); } catch (e:Dynamic) {}
 	}
 
 	// ==================== 🩺 诊断写盘 ====================
@@ -235,52 +267,42 @@ class VideoHandler extends FlxSubState
 			+ ' scroll=' + video.scrollFactor.x + ',' + video.scrollFactor.y
 			+ ' cams=' + (video.cameras == null ? 'null' : '' + video.cameras.length));
 
-		// ★★★ [PE-iOS] ★★★ 关键修复：把自己作为 SubState 打开 ★★★
+		// ★★★ [PE-iOS] ★★★ 关键：复刻 intro 的挂载方式 ★★★
 		//
-		//   这是过场黑屏的【真正根因】！
+		//   intro 稳，是因为它在 FlxState 里 `add(vs)` —— 视频 sprite 成为
+		//   state 的直接成员，被正常 update/draw。
 		//
-		//   hxCodec 原版 `playVideo()` 的本质是：new 一个 VideoHandler（FlxSubState），
-		//   然后【把自己 openSubState 到当前 state 上】—— 只有这样它才会被
-		//   update() 与 draw()。模组那边只写：
-		//       var video = new MP4Handler();
-		//       video.playVideo(filepath);       ← 打开动作就发生在这里
-		//       video.finishCallback = ...;
-		//   模组【不会】自己 addChild / openSubState。
+		//   本类不再是 substate，所以这里也要把【视频 sprite】直接挂到
+		//   `FlxG.state` 上（而不是挂到 this 这个控制器上 —— 控制器不在显示树里）。
 		//
-		//   而我们的旧实现只 `add(video)` 到自己身上，却从未 openSubState(this) ⇒
-		//   这个 substate 永远不进 FlxG 的更新/绘制链 ⇒ 画面不显示（黑屏）、
-		//   update() 不跑（超时兜底失效）、onVideoFinished 不触发（剧情卡死）。
-		//
-		//   ⇒ 必须在这里把自己打开。（用 Reflect 兼顾不同 flixel 版本的方法名差异。）
-		var opened:Bool = false;
-		try
-		{
-			var st:Dynamic = FlxG.state;
-			if (st != null)
-			{
-				// flixel 4.x：openSubState(subState) ；部分版本是 openSubState(subState, ?closePrev)
-				if (Reflect.hasField(st, 'openSubState'))
-				{
-					Reflect.callMethod(st, Reflect.field(st, 'openSubState'), [this]);
-					opened = true;
-				}
-			}
-		}
-		catch (e:Dynamic) { diag('[openSubState] 打开失败: ' + e); opened = false; }
+		//   同时把【控制器自己】也挂到 FlxG.state，这样它的 update() 才会跑
+		//   （计时、跳过检测、超时兜底都在 update 里）。
+		hostState = null;
+		try { hostState = FlxG.state; } catch (e:Dynamic) { hostState = null; }
 
-		if (!opened)
+		if (hostState != null)
 		{
-			// 兜底：直接挂到当前 state 的显示列表（至少保证能画出来）
-			diag('[openSubState] 未能打开 substate，改用 addChild 兜底');
 			try
 			{
-				var st2:Dynamic = FlxG.state;
-				if (st2 != null && Reflect.hasField(st2, 'addChild'))
-					Reflect.callMethod(st2, Reflect.field(st2, 'addChild'), [this]);
+				// 视频 sprite 挂到 state（真正被绘制的对象）
+				hostState.add(video);
+				diag('[mount] video 已 add 到 FlxG.state');
 			}
-			catch (e:Dynamic) { diag('[openSubState] addChild 兜底也失败: ' + e); }
+			catch (e:Dynamic) { diag('[mount] video add 到 state 失败: ' + e); }
+
+			try
+			{
+				// 控制器自己挂到 state（让 update() 跑起来）
+				hostState.add(this);
+				diag('[mount] 控制器已 add 到 FlxG.state');
+			}
+			catch (e:Dynamic) { diag('[mount] 控制器 add 到 state 失败: ' + e); }
 		}
-		diag('[openSubState] 结果=' + opened);
+		else
+		{
+			diag('[mount] FlxG.state 为 null！只能挂在自己身上');
+			add(video);
+		}
 
 		if (video.bitmap != null)
 		{
@@ -580,7 +602,7 @@ class VideoHandler extends FlxSubState
 		onVideoFinished();
 	}
 
-	/** 播放结束 / 被跳过：收尾、回调、关掉 substate */
+	/** 播放结束 / 被跳过：收尾、回调 */
 	public function onVideoFinished():Void
 	{
 		if (ended) return;
@@ -588,17 +610,21 @@ class VideoHandler extends FlxSubState
 		playing = false;
 		diag('[finish] 视频结束/被跳过');
 
+		// ★ [PE-iOS] 先把视频与控制器从它挂的那个 state 上摘掉。
+		//   本类不是 substate，所以没有 close()，必须手动 remove。
+		try
+		{
+			if (hostState != null)
+			{
+				if (video != null) { try { hostState.remove(video, true); } catch (e:Dynamic) {} }
+				try { hostState.remove(this, true); } catch (e:Dynamic) {}
+			}
+		}
+		catch (e:Dynamic) { diag('[finish] 从 state 摘除出错（已忽略）: ' + e); }
+
 		if (video != null)
 		{
-			try
-			{
-				remove(video, true);
-				video.destroy();
-			}
-			catch (e:Dynamic)
-			{
-				diag('[finish] 释放视频对象出错（已忽略）: ' + e);
-			}
+			try { video.destroy(); } catch (e:Dynamic) { diag('[finish] 释放视频对象出错（已忽略）: ' + e); }
 			video = null;
 		}
 
@@ -607,13 +633,8 @@ class VideoHandler extends FlxSubState
 			try { FlxG.sound.music.play(); } catch (e:Dynamic) {}
 		}
 
-		// ★ [PE-iOS] 先关闭自己的 substate，再触发回调。
-		//   原因：finishCallback 里模组通常会 startCountdown()/endSong()，
-		//   可能马上又打开新的 substate。若先回调后 close，close() 会把
-		//   模组刚打开的那个也关掉。先关自己最安全。
-		//   （close() 只关「当前顶层 substate = this」，此时还没被新 substate 顶替。）
-		try { close(); } catch (e:Dynamic) {}
-
+		// ★ [PE-iOS] 先收尾（已摘除），再触发回调。
+		//   finishCallback 里模组通常会 startCountdown()/endSong()，可能马上又开新东西。
 		if (finishCallback != null) finishCallback();
 		if (onVideoEnd != null) onVideoEnd();
 	}
