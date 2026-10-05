@@ -187,6 +187,42 @@ class VideoHandler extends FlxSprite
 				+ ',ox=' + Std.string(v.offset.x) + ',oy=' + Std.string(v.offset.y) + ')'
 				+ ' FlxG(' + FlxG.width + 'x' + FlxG.height + ')';
 
+			// ★★★ [PE-iOS] 决定性诊断：FlxSprite.draw() 的三个「提前 return」条件 ★★★
+			//
+			//   源码依据（flixel 4.11.0 FlxSprite.hx:664 起）：
+			//       override public function draw():Void
+			//       {
+			//           checkEmptyFrame();
+			//           if (alpha == 0 || _frame.type == FlxFrameType.EMPTY)
+			//               return;                      // ← 条件A：alpha / 空帧
+			//           ...
+			//           for (camera in cameras)
+			//           {
+			//               if (!camera.visible || !camera.exists
+			//                   || !isOnScreen(camera)) continue;   // ← 条件B
+			//               ...
+			//           }
+			//       }
+			//
+			//   只要命中任一条件，视频 sprite 就【完全不画】—— 而声音走的是
+			//   libVLC 的音频回调（与绘制链无关），于是表现为【有声音、没画面】。
+			//   把这三项直接打出来，一次就能确认到底卡在哪一条。
+			s += ' sprite(alpha=' + Std.string(v.alpha)
+				+ ' vis=' + v.visible
+				+ ' exists=' + v.exists
+				+ ' frameType=' + Std.string(Reflect.field(v, '_frame'))
+				+ ' hasGfx=' + (Reflect.field(v, 'graphic') != null) + ')';
+
+			var fl:Dynamic = Reflect.field(v, '_frame');
+			if (fl != null)
+			{
+				var ft:Dynamic = Reflect.field(fl, 'type');
+				s += ' frame.type=' + Std.string(ft)
+					+ ' frame.size=' + Std.string(Reflect.field(fl, 'sourceSize'));
+			}
+			try { s += ' camCount=' + (v.cameras == null ? -1 : v.cameras.length); }
+			catch (e:Dynamic) { s += ' camCount=?'; }
+
 			var g:Dynamic = FlxG.game;
 			if (g != null)
 			{
@@ -224,8 +260,17 @@ class VideoHandler extends FlxSprite
 	{
 		if (path == null || path.length < 1)
 		{
-			diag('[playVideo] 收到空路径，直接跳过');
-			onVideoFinished();
+			diag('[playVideo] 收到空路径，跳过');
+			// ★ 不要在这里直接 onVideoFinished()。
+			//   模组侧的调用顺序是：
+			//       var video = new MP4Handler();
+			//       video.playVideo(filepath);          // ← 先播放
+			//       video.finishCallback = function(){};// ← 后设回调
+			//   若 playVideo 内部【同步】走到 onVideoFinished()，此时
+			//   finishCallback 还是 null ⇒ 回调丢失 ⇒ 剧情卡死（inCutscene
+			//   永远为 true，startAndEnd() 永不执行）。
+			//   统一延迟一拍，保证调用方有机会先把 finishCallback 赋上。
+			deferFinish();
 			return;
 		}
 
@@ -502,7 +547,9 @@ class VideoHandler extends FlxSprite
 		if (!loaded)
 		{
 			diag('[load] 两次都失败，跳过该视频');
-			onVideoFinished();
+			// ★ 同上：这里仍在 playVideo() 的【同步】栈里，调用方很可能还没
+			//   来得及赋 finishCallback。延迟一拍再收尾，避免回调丢失卡死。
+			deferFinish();
 			return;
 		}
 
@@ -613,6 +660,30 @@ class VideoHandler extends FlxSprite
 		onVideoFinished();
 	}
 
+	/**
+	 * [PE-iOS] 把「收尾」推迟到下一拍执行。
+	 *
+	 * ── 为什么必需 ────────────────────────────────────────────────────
+	 * 模组（以及 PlayState.startVideo）的调用顺序是【播放在前、回调在后】：
+	 *
+	 *     var video = new MP4Handler();
+	 *     video.playVideo(filepath);            // ①
+	 *     video.finishCallback = function(){};  // ②  ← 晚一步才赋值
+	 *
+	 * 而 playVideo() 里存在若干【同步】失败出口（空路径、文件不存在、
+	 * load 两次失败…）。若在这些出口直接 onVideoFinished()，此时
+	 * finishCallback 必然还是 null：
+	 *   · 回调丢失 ⇒ 模组的 startCountdown()/endSong() 永不执行；
+	 *   · PlayState.inCutscene 永远为 true ⇒ 整个打歌卡死。
+	 *
+	 * 推迟一拍（FlxTimer 0.001s）后，调用方已执行完 ②，回调不再丢失。
+	 * onVideoFinished() 自身有 `if (ended) return;` 去重，重复调用无副作用。
+	 */
+	private function deferFinish():Void
+	{
+		new FlxTimer().start(0.001, function(_:FlxTimer) { onVideoFinished(); });
+	}
+
 	/** 播放结束 / 被跳过：收尾、回调 */
 	public function onVideoFinished():Void
 	{
@@ -656,9 +727,60 @@ class VideoHandler extends FlxSprite
 
 		if (started && video != null && playing)
 		{
+			// ★★★ [PE-iOS] 每帧「保命」矫正 ★★★
+			//
+			//   现象：有声音、没画面。音频走 libVLC 回调，与 flixel 绘制链无关；
+			//   所以只要 sprite 命中 FlxSprite.draw() 的任一提前 return 条件，
+			//   就会「有声音没画面」。这里每帧把这三条都按下去：
+			//
+			//     A. alpha == 0 或空帧     → 强制 alpha=1（帧由 hxvlc 的
+			//        loadGraphic 填，若为空帧则下面的 forceFrameFix 会记录）
+			//     B. visible == false       → 强制 true（我们只关 bitmap 的 visible，
+			//        从不关 sprite 自己的；但有别的代码可能误关）
+			//     C. !isOnScreen(camera)    → 重算居中坐标，保证落在视口内
+			//
+			//   同时把「我们关掉的内层 bitmap」状态维持住（避免它跳出来叠画）。
+			if (video.alpha <= 0) video.alpha = 1;
+			if (!video.visible) video.visible = true;
+			if (!video.exists) video.exists = true;
+
+			// 坐标/缩放矫正：以相机视口为基准重新居中。
+			// 只在尺寸有效时做，避免每帧抖动。
+			try
+			{
+				var bmd = video.bitmap != null ? video.bitmap.bitmapData : null;
+				if (bmd != null && bmd.width > 1 && bmd.height > 1)
+				{
+					var cam:flixel.FlxCamera = null;
+					if (video.cameras != null && video.cameras.length > 0) cam = video.cameras[0];
+					if (cam == null && FlxG.cameras.list.length > 0) cam = FlxG.cameras.list[0];
+
+					var viewW:Float = (cam != null) ? cam.width : FlxG.width;
+					var viewH:Float = (cam != null) ? cam.height : FlxG.height;
+					if (viewW > 0 && viewH > 0)
+					{
+						var sc:Float = Math.min(viewW / bmd.width, viewH / bmd.height);
+						if (sc > 0 && sc == sc)
+						{
+							if (Math.abs(video.scale.x - sc) > 0.001)
+							{
+								video.scale.set(sc, sc);
+								video.updateHitbox();
+								video.x = (viewW - video.width) / 2;
+								video.y = (viewH - video.height) / 2;
+							}
+						}
+					}
+				}
+			}
+			catch (e:Dynamic) {}
+
 			diagFrame++;
-			if (diagFrame == 30 || diagFrame == 120)
+			if (diagFrame == 30 || diagFrame == 60 || diagFrame == 120)
+			{
 				diagRawBitmap('f' + diagFrame, video);
+				diagCoords('f' + diagFrame, video);
+			}
 
 			// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
 			//   某些情况下 hxvlc 在 iOS 上【不派发 onEndReached】，
