@@ -449,6 +449,17 @@ class TitleState extends MusicBeatState
 	var introPlaying:Bool = false;
 	var introTime:Float = 0;
 	var introFrame:Int = 0;
+
+	/**
+	 * [PE-iOS] intro 真视频的【最小播放时长】门槛（秒）。
+	 *
+	 * 为什么需要：iOS 上 hxvlc 可能过早派发 onEndReached（或在 load/format 阶段
+	 * 误派发一次），导致 intro 刚播 1 秒就被 endIntroVideo() 收尾。
+	 * 低于此值的 onEndReached 一律忽略；真正播完时 introTime 早已超过它。
+	 * 同时这也是「跳过」的最早允许时间（含系统幽灵触摸防护）。
+	 */
+	static inline var MIN_INTRO_SECONDS:Float = 2.5;
+
 	#if VIDEOS_ALLOWED
 	var introVideo:hxvlc.flixel.FlxVideoSprite = null;
 	/// [PE-iOS] 片头视频时长（秒），由 bitmap.onLengthChanged 填充；0 = 未知
@@ -598,7 +609,25 @@ class TitleState extends MusicBeatState
 				}
 				catch (e:Dynamic) {}
 			});
-			vs.bitmap.onEndReached.add(endIntroVideo);
+			// ★ [PE-iOS] onEndReached 加「最小播放时长」保护。
+			//
+			//   现象：intro 只播 1 秒就过。若 hxvlc 在 iOS 上过早派发 onEndReached
+			//   （或在 load/format 阶段就误派发一次），会立刻 endIntroVideo()。
+			//   所以这里不直接绑定 endIntroVideo，而是绑一个守卫：
+			//     · 播放不足 MIN_INTRO_SECONDS 秒时，忽略这次回调（等真正播完）；
+			//     · 超过门槛才收尾。
+			//   真正播完时 onEndReached 会正常到达（此时 introTime 已 > 门槛）。
+			vs.bitmap.onEndReached.add(function():Void
+			{
+				if (!introPlaying) return;
+				if (introTime < MIN_INTRO_SECONDS)
+				{
+					// 太早：很可能是误派发，记一笔并忽略
+					trace('[PE-iOS] 忽略过早的 onEndReached（introTime=' + introTime + ' < ' + MIN_INTRO_SECONDS + '）');
+					return;
+				}
+				endIntroVideo();
+			});
 			// [PE-iOS] 记录视频时长。
 			//   注意：FlxVideoSprite 本身【没有 length 字段】，时长在底层
 			//   `hxvlc.openfl.Video` 上（即 vs.bitmap.length），单位【微秒】。
@@ -633,6 +662,12 @@ class TitleState extends MusicBeatState
 					{
 						introVideoDurSec = v / 1000000.0;
 						trace('[PE-iOS] intro 视频时长 = ' + introVideoDurSec + ' 秒 (raw=' + Std.string(us) + ')');
+						try
+						{
+							File.saveContent(SUtil.getPath() + 'pe_ios_intro.txt',
+								'[introLength] raw=' + Std.string(us) + ' sec=' + introVideoDurSec + '\n');
+						}
+						catch (e:Dynamic) {}
 					}
 				});
 			}
@@ -839,9 +874,9 @@ class TitleState extends MusicBeatState
 			if (introUsingVideo)
 			{
 				// 真视频：画面与声音都由 hxvlc 负责，正常播完走 onEndReached → endIntroVideo。
-				// 这里只处理「点一下跳过」。门槛用 1.5 秒（原 0.6）：
-				// iOS 开场容易有系统/幽灵触摸被 justPressed 误判，0.6 秒太短 ⇒ 秒过。
-				if (introTime > 1.5 && introSkippedByInput())
+				// 这里只处理「点一下跳过」。门槛用 MIN_INTRO_SECONDS(2.5s)：
+				// iOS 开场容易有系统/幽灵触摸被 justPressed 误判，门槛太短 ⇒ 秒过。
+				if (introTime > MIN_INTRO_SECONDS && introSkippedByInput())
 					endIntroVideo();
 
 				// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★
@@ -851,20 +886,21 @@ class TitleState extends MusicBeatState
 				//
 				//   时长来源：bitmap.onLengthChanged（已换算成【秒】存进 introVideoDurSec）。
 				//   （FlxVideoSprite 没有 length 字段，别写成 introVideo.length！）
-				//   拿不到时长时用固定上限兜底，绝不死锁。
 				//
-				//   endIntroVideo() 内部有 `if (!introPlaying) return;` 去重，
-				//   所以事件正常触发时不会重复执行。
-				if (introPlaying && introVideoDurSec > 0
-					&& introTime > introVideoDurSec + 1.5)
+				//   ⚠ 只信「合理」的时长：若解析出的时长小于 MIN_INTRO_SECONDS，
+				//     几乎一定是解析错误（Int64 结构没取对）而不是真视频这么短，
+				//     此时不拿它做收尾依据，改走固定上限，避免「刚播就收」。
+				//   endIntroVideo() 内部有 `if (!introPlaying) return;` 去重。
+				var durUsable:Bool = (introVideoDurSec >= MIN_INTRO_SECONDS);
+				if (introPlaying && durUsable && introTime > introVideoDurSec + 1.5)
 				{
 					trace('[PE-iOS] 片头视频超时兜底收尾（onEndReached 未触发）dur=' + introVideoDurSec);
 					endIntroVideo();
 				}
-				else if (introPlaying && introVideoDurSec <= 0 && introTime > 180.0)
+				else if (introPlaying && !durUsable && introTime > 180.0)
 				{
-					// 连时长都拿不到 → 3 分钟硬上限，绝不死锁
-					trace('[PE-iOS] 片头视频时长未知，硬超时兜底收尾');
+					// 时长不可用/离谱 → 3 分钟硬上限，绝不死锁
+					trace('[PE-iOS] 片头视频时长不可用，硬超时兜底收尾');
 					endIntroVideo();
 				}
 			}
@@ -881,7 +917,7 @@ class TitleState extends MusicBeatState
 						setIntroFrame(introFrame);
 					}
 				}
-				if (introPlaying && introTime > 0.6 && introSkippedByInput())
+				if (introPlaying && introTime > MIN_INTRO_SECONDS && introSkippedByInput())
 					endIntroVideo();
 			}
 
