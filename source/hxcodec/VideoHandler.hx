@@ -295,13 +295,21 @@ class VideoHandler extends FlxSprite
 		}
 		else
 		{
-			// 极端兜底：FlxG.state 都取不到（几乎不可能）。
-			// ⚠ 不能用 add(video) —— 本类继承 FlxSprite，没有 add()。
-			//   注意：不要再 addChild(video.bitmap) —— FlxVideoSprite 构造时
-			//   已经把它 addChild 到 FlxG.game 了，重复添加会报警/异常。
-			//   这里只把整个 video sprite 挂上去即可。
-			diag('[mount] FlxG.state 为 null！改用 FlxG.game 兜底挂载');
-			try { FlxG.game.addChild(video); } catch (e:Dynamic) { diag('[mount] FlxG.game 兜底失败: ' + e); }
+			// 极端兜底：FlxG.state 取不到（几乎不可能）。
+			//
+			// ⚠⚠ 这里【只能】放弃挂载，绝不能走 `FlxG.game.addChild(video)`。
+			//   编译错误实录（commit 9f7860c8，CI 失败）：
+			//     VideoHandler.hx:304: hxvlc.flixel.FlxVideoSprite should be
+			//     openfl.display.DisplayObject ... For function argument 'child'
+			//   原因：FlxG.game 是 `FlxGame extends Sprite`，addChild 形参要求
+			//   `DisplayObject`；而 FlxVideoSprite 继承自 `FlxSprite`（纯 Haxe
+			//   对象，不是 openfl 显示树节点），两者没有继承关系 ⇒ 编译不过。
+			//
+			//   而对比 intro 的写法（TitleState.startIntroRealVideo）：
+			//       var vs = new FlxVideoSprite();
+			//       add(vs);                 // ← add 到 FlxState，不是 addChild 到 game
+			//   它从来不需要 addChild。⇒ 这里也保持「要么挂 state，要么不挂」。
+			diag('[mount] FlxG.state 为 null！无法挂载（不会崩溃，视频将不显示）');
 		}
 
 		diag('[create] FlxVideoSprite 已创建 bitmap=' + (video.bitmap == null ? 'null' : 'ok')
