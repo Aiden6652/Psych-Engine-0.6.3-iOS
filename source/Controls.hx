@@ -431,10 +431,8 @@ class Controls extends FlxActionSet
 		inline forEachBound(Control.NOTE_DOWN, (action, state) -> addbuttonuNOTES(action, hitbox.buttonDown, state));
 		inline forEachBound(Control.NOTE_LEFT, (action, state) -> addbuttonuNOTES(action, hitbox.buttonLeft, state));
 		inline forEachBound(Control.NOTE_RIGHT, (action, state) -> addbuttonuNOTES(action, hitbox.buttonRight, state));	
-		if(ClientPrefs.hitBoxSpace)
-		inline forEachBound(Control.SPACE, (action, state) -> addbuttonuNOTES(action, hitbox.buttonSpace, state));
-		if(ClientPrefs.hitBoxShift)
-			inline forEachBound(Control.SHIFT, (action, state) -> addbuttonuNOTES(action, hitbox.buttonShift, state));		
+		// [PE-iOS] space / shift 触控按键已彻底移除（见 FlxHitbox.hx 顶部说明）：
+		//   它们会为按键预留一行、把 4 列压缩成 75% 高，导致列底色带不能贴屏幕最底。
 	}
 	
 	public function setVirtualPadUI(virtualPad:FlxVirtualPad, ?DPad:FlxDPadMode, ?Action:FlxActionMode) 
