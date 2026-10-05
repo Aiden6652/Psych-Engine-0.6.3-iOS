@@ -167,7 +167,12 @@ class VideoHandler extends FlxSubState
 					return;
 				}
 
-				var scale:Float = Math.max(FlxG.width / bmd.width, FlxG.height / bmd.height);
+				// [PE-iOS] 用 Math.min（等比缩放到「完整放得下」）：不放大、不裁切。
+				//   之前用 Math.max 是「铺满画布」策略 —— 会把视频放大并裁掉边缘，
+				//   这就是用户反馈的「过场视频被放大」的直接原因。
+				//   视频本来就该完整显示，宁可留黑边也不要放大。
+				//   注意：必须与 Main.hx 的 scaleVideoBitmaps() 保持一致（同为 Math.min）。
+				var scale:Float = Math.min(FlxG.width / bmd.width, FlxG.height / bmd.height);
 				if (scale <= 0 || scale != scale) scale = 1; // NaN 自检
 				var tw:Int = Std.int(Math.max(1, bmd.width * scale));
 				var th:Int = Std.int(Math.max(1, bmd.height * scale));

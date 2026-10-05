@@ -170,26 +170,22 @@ class Main extends Sprite
 	private function setupGame():Void
 	{
 		// ==================== [PE-iOS] 视频渲染路径 ====================
-		// 必须走 CPU 位图路径（Video.useTexture = false）：
-		//   hxvlc 默认的 GPU 纹理路径在「多相机」场景（打歌 / 过场 substate）下不出图，
-		//   实测表现就是「有声音、没画面」；而 intro.mp4 挂在单相机的 TitleState 上，
-		//   所以它在 GPU 路径下能正常显示 —— 这也解释了「只有 intro 正常」的现象。
-		//   切到 CPU 位图路径后，过场视频（hxcodec 兼容层 VideoHandler）才能出画面。
+		// ⚠ 历史遗留说明（两轮结论相反，以实测为准）：
+		//   0ca9ba4：为排查「过场视频没画面」曾强制 useTexture=false（CPU 位图路径）
+		//   4b7f69e：实测「视频已能正常播放」，于是撤销该设置、回默认 GPU 纹理路径，
+		//            理由是 CPU 路径每帧要多拷一份 1080p 帧（约 8MB），
+		//            易造成随机掉帧/卡死（tormentor 随机卡住即此类特征）
 		//
-		// 代价：每帧多拷一份视频帧（1080p 约 8MB）到内存。
-		//   之前担心它造成随机卡顿，但那只是推测（未坐实），而「过场视频没画面」是确定的问题，
-		//   两害相权取其轻 —— 先保证画面能出来。
-		#if (VIDEOS_ALLOWED && ios)
-		try
-		{
-			hxvlc.openfl.Video.useTexture = false;
-			trace('[PE-iOS] 视频渲染：已切换为 CPU 位图路径 (Video.useTexture=false)');
-		}
-		catch (e:Dynamic)
-		{
-			trace('[PE-iOS] 切换视频渲染路径失败（已忽略）: ' + e);
-		}
-		#end
+		// ➜ 当前决定：**保持 hxvlc 默认（GPU 纹理路径）**，不再强制 useTexture。
+		//   依据：用户实测「所有版本 intro.mp4 都能正常出画面」，
+		//   且 4b7f69e 撤销后过场视频也确实能播 ⇒
+		//   「过场没画面」与渲染路径无关，此前那段「GPU 路径多相机不出图」的
+		//   推断已被实测推翻，不应再保留该强制设置。
+		//
+		//   若日后确实遇到某个视频在 GPU 路径下不出图，
+		//   再把它作为针对性开关临时打开（改 false），不要长期强制。
+		//
+		// （下面这段已停用，保留仅为标记位置）
 
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
