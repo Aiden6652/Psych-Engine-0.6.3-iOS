@@ -179,6 +179,27 @@ class PlayState extends MusicBeatState
 	public var camZooming:Bool = false;
 	public var camZoomingMult:Float = 1;
 	public var camZoomingDecay:Float = 1;
+
+	/**
+	 * [PE-iOS] 是否允许「引擎自动推近镜头」。
+	 *
+	 * 症状（用户实测）：对手唱歌时整个界面被放大，放大后不恢复 ——
+	 *   4 个箭头只能看到一半、下方血条也只能看到一半（游戏窗口大小不变）。
+	 *
+	 * 原因：引擎在两处会自动给相机加 zoom，而且只要 camZooming==true 就【不会回落】：
+	 *   1) opponentNoteHit —— 对手每命中一个音符 zoom += 0.015（本节 4866 行附近）
+	 *   2) sectionHit —— 每个 section 开头 zoom += 0.015（本节 5094 行附近）
+	 *   两者累加，打一首歌就会被推得很近且永不还原。
+	 *
+	 * 本开关默认 false：**关掉引擎自动推近**，但【模组的镜头事件不受影响】——
+	 *   - 'Add Camera Zoom' 事件（模组用 value1/value2 指定推近量）仍然生效；
+	 *   - 'Lightning'（闪电）事件里的 zoom += 0.5 仍然生效。
+	 * 也就是说：只有引擎「自作主张」的那部分被禁掉，模组想要的效果照旧。
+	 *
+	 * 想让引擎恢复原行为：把本常量改为 true。
+	 */
+	static inline var PEI_AUTO_CAMZOOM:Bool = false;
+
 	private var curSong:String = "";
 
 	public var gfSpeed:Int = 1;
@@ -4863,7 +4884,7 @@ class PlayState extends MusicBeatState
 			gf.playAnim('scared', true);
 		}
 
-		if(ClientPrefs.camZooms) {
+		if(ClientPrefs.camZooms && PEI_AUTO_CAMZOOM) {
 			FlxG.camera.zoom += 0.015;
 			camHUD.zoom += 0.03;
 
@@ -5091,7 +5112,7 @@ class PlayState extends MusicBeatState
 				moveCameraSection();
 			}
 
-			if (camZooming && FlxG.camera.zoom < 1.35 && ClientPrefs.camZooms)
+			if (camZooming && FlxG.camera.zoom < 1.35 && ClientPrefs.camZooms && PEI_AUTO_CAMZOOM)
 			{
 				FlxG.camera.zoom += 0.015 * camZoomingMult;
 				camHUD.zoom += 0.03 * camZoomingMult;
