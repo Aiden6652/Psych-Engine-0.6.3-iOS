@@ -456,8 +456,21 @@ class VideoHandler extends FlxSprite
 				}
 
 				// 诊断：把候选基准全打出来，一眼看出谁在飘。
+				//   （不再引用 cam —— 适配基准已统一改为 FlxG.width/height，
+				//     保留相机宽度仅作对照参考。）
+				var camW:Float = -1;
+				var camH:Float = -1;
+				try
+				{
+					if (FlxG.cameras.list != null && FlxG.cameras.list.length > 0 && FlxG.cameras.list[0] != null)
+					{
+						camW = FlxG.cameras.list[0].width;
+						camH = FlxG.cameras.list[0].height;
+					}
+				}
+				catch (e:Dynamic) {}
 				diag('[basis] FlxG=' + FlxG.width + 'x' + FlxG.height
-					+ ' cam=' + (cam == null ? 'null' : cam.width + 'x' + cam.height)
+					+ ' cam(list[0])=' + camW + 'x' + camH
 					+ ' initial=' + FlxG.initialWidth + 'x' + FlxG.initialHeight
 					+ ' → 采用 view=' + viewW + 'x' + viewH);
 
