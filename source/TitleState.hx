@@ -610,8 +610,30 @@ class TitleState extends MusicBeatState
 				vs.bitmap.onLengthChanged.add(function(us:Dynamic):Void
 				{
 					var v:Float = 0;
-					try { v = Std.parseFloat(Std.string(us)); } catch (e:Dynamic) { v = 0; }
-					if (v > 0) introVideoDurSec = v / 1000000.0;
+					try
+					{
+						// us 是 Int64（hxcpp 下是对象），Std.string 可能是数字，
+						// 也可能带结构；先用 parseFloat 直接试，失败再用 low 字段兜底。
+						v = Std.parseFloat(Std.string(us));
+					}
+					catch (e:Dynamic) { v = 0; }
+
+					if ((v != v || v <= 0))
+					{
+						// 兜底：Int64 对象取 low（低 32 位）—— 对常见短视频（< 71 分钟）足够
+						try
+						{
+							var low:Dynamic = Reflect.field(us, 'low');
+							if (low != null) v = Std.parseFloat(Std.string(low));
+						}
+						catch (e:Dynamic) {}
+					}
+
+					if (v > 0)
+					{
+						introVideoDurSec = v / 1000000.0;
+						trace('[PE-iOS] intro 视频时长 = ' + introVideoDurSec + ' 秒 (raw=' + Std.string(us) + ')');
+					}
 				});
 			}
 			catch (e:Dynamic) {}
@@ -757,14 +779,44 @@ class TitleState extends MusicBeatState
 
 	function introSkippedByInput():Bool
 	{
-		var pressed:Bool = FlxG.keys.justPressed.ANY || FlxG.mouse.justPressed;
-		#if mobile
-		for (touch in FlxG.touches.list)
+		// ★★★ [PE-iOS] 修复「intro 只播一秒就过」★★★
+		//
+		//   旧写法把 `FlxG.mouse.justPressed` 与所有 touch 的 `justPressed` 都算作跳过。
+		//   但在 iOS 上：
+		//     · FlxG.mouse 是【用触摸模拟】的，手指一碰到屏幕（甚至系统手势的
+		//       边缘滑动）就会置 justPressed；
+		//     · FlxG.touches.list 里可能存在【上一帧遗留】或【系统合成】的触摸，
+		//       在开场瞬间误判为 justPressed。
+		//   结果 introTime 一过 0.6 秒，这一帧就被判定「用户要跳过」⇒ endIntroVideo()
+		//   ⇒ 表现为「只播一秒就过」。
+		//
+		//   修法：
+		//     1) 提高时间门槛（0.6s → 1.5s），避开开场触发的系统触摸；
+		//     2) 只认【当前帧内真实按下】的触摸：要求 touch.justPressed 且
+		//        该触摸处于 pressed 状态（双重确认），排除遗留/幽灵触摸；
+		//     3) 键盘保持原样（桌面端仍可按键跳过）。
+		if (FlxG.keys.justPressed.ANY) return true;
+
+		try
 		{
-			if (touch.justPressed) pressed = true;
+			if (FlxG.mouse != null && FlxG.mouse.justPressed) return true;
 		}
+		catch (e:Dynamic) {}
+
+		#if mobile
+		try
+		{
+			for (touch in FlxG.touches.list)
+			{
+				if (touch == null) continue;
+				// 双重确认：既 justPressed 又 pressed，过滤幽灵触摸
+				if (touch.justPressed && touch.pressed) return true;
+			}
+		}
+		catch (e:Dynamic) {}
 		#end
-		return pressed;
+
+		return false;
 	}
 
 	var transitioning:Bool = false;
@@ -787,8 +839,9 @@ class TitleState extends MusicBeatState
 			if (introUsingVideo)
 			{
 				// 真视频：画面与声音都由 hxvlc 负责，正常播完走 onEndReached → endIntroVideo。
-				// 这里只处理「点一下跳过」（开场 0.6 秒内不响应，避免误触）。
-				if (introTime > 0.6 && introSkippedByInput())
+				// 这里只处理「点一下跳过」。门槛用 1.5 秒（原 0.6）：
+				// iOS 开场容易有系统/幽灵触摸被 justPressed 误判，0.6 秒太短 ⇒ 秒过。
+				if (introTime > 1.5 && introSkippedByInput())
 					endIntroVideo();
 
 				// ★★★ [PE-iOS] 关键兜底：不依赖 onEndReached ★★★

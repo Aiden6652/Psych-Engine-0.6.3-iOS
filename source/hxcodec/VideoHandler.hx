@@ -194,13 +194,27 @@ class VideoHandler extends FlxSubState
 
 		// 钉在屏幕上，不受相机滚动/缩放影响
 		video.scrollFactor.set(0, 0);
+
+		// ★★★ [PE-iOS] 关键修正：与 intro 保持一致 —— 【不手动指定相机】 ★★★
+		//
+		//   旧代码在这里把 video.cameras 指定成 `FlxG.cameras.list` 的【最后一个】：
+		//       video.cameras = [cams[cams.length - 1]];
+		//   但 FlxG.cameras.list 的最后一个【不是 camGame】—— PlayState 里
+		//   通常还有 HUD 相机或其它附加相机，它们的视口/滚动与 camGame 不同。
+		//
+		//   FlxSubState 里的 sprite 默认走父 state 的默认相机链（camGame），
+		//   而 intro（TitleState 里 `add(vs)`、不指定相机）正是这么做的 —— 所以
+		//   intro 能正常出画面。把过场也交给「最后一个相机」就等于把它画到
+		//   另一个视口里 ⇒ 出画外 ⇒ **看着像黑屏**。
+		//
+		//   ⇒ 结论：不指定相机，与 intro 完全对齐。
+		//   （scrollFactor=0 已保证不受滚动影响；缩放居中在 onFormatSetup 里做。）
 		try
 		{
-			var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
-			if (cams != null && cams.length > 0)
-				video.cameras = [cams[cams.length - 1]];
+			// 仅记录，不修改：便于日志确认默认相机是哪一个。
+			diag('[camera] 不指定相机（与 intro 对齐）；当前相机数=' + FlxG.cameras.list.length);
 		}
-		catch (e:Dynamic) { diag('[camera] 指定相机失败: ' + e); }
+		catch (e:Dynamic) {}
 
 		add(video);
 		diag('[create] FlxVideoSprite 已创建 bitmap=' + (video.bitmap == null ? 'null' : 'ok')
@@ -271,6 +285,11 @@ class VideoHandler extends FlxSubState
 				//   而视频是【交给相机绘制】的，真正决定「可视区域」的是相机视口
 				//   `cam.width/height`（FlxCamera.width 取自 FlxG.width，但它是缓存值，
 				//   在 scaleMode 更新后才是最终值）。用相机视口做基准，天然与绘制一致。
+				//
+				//   ⚠ 获取顺序（与 intro 对齐）：
+				//     1) video.cameras[0]（若 flixel 已给它挂上默认相机）
+				//     2) 否则取 FlxG.cameras.list[0] —— 通常就是 camGame
+				//     （不再取最后一个！那正是「交给错误相机 → 黑屏」的原因，见上文）
 				var cam:flixel.FlxCamera = null;
 				try
 				{
@@ -278,6 +297,16 @@ class VideoHandler extends FlxSubState
 						cam = video.cameras[0];
 				}
 				catch (e:Dynamic) { cam = null; }
+
+				if (cam == null)
+				{
+					try
+					{
+						var cams:Array<flixel.FlxCamera> = FlxG.cameras.list;
+						if (cams != null && cams.length > 0) cam = cams[0];
+					}
+					catch (e:Dynamic) { cam = null; }
+				}
 
 				var viewW:Float = (cam != null) ? cam.width : FlxG.width;
 				var viewH:Float = (cam != null) ? cam.height : FlxG.height;
@@ -341,6 +370,18 @@ class VideoHandler extends FlxSubState
 				{
 					var v:Float = 0;
 					try { v = Std.parseFloat(Std.string(us)); } catch (e:Dynamic) { v = 0; }
+
+					if (v != v || v <= 0)
+					{
+						// Int64 对象兜底：取 low（对常见短视频足够）
+						try
+						{
+							var low:Dynamic = Reflect.field(us, 'low');
+							if (low != null) v = Std.parseFloat(Std.string(low));
+						}
+						catch (e:Dynamic) {}
+					}
+
 					if (v > 0) videoDurSec = v / 1000000.0;
 				});
 			}
@@ -398,7 +439,8 @@ class VideoHandler extends FlxSubState
 			if (playing && video != null) { diagRawBitmap('t3.0', video); diagCoords('t3.0', video); }
 		});
 
-		new FlxTimer().start(0.5, function(_:FlxTimer) canSkipNow = true);
+		// 跳过冷却：1.5 秒（原 0.5）。iOS 开场易有幽灵触摸，太短会导致「一播就过」。
+		new FlxTimer().start(1.5, function(_:FlxTimer) canSkipNow = true);
 
 		// ★ [PE-iOS] 自动兜底：1.5 秒后检查 FlxSprite 正路到底出没出画面，
 		//   没出画面就自动打开内层 Bitmap（画面会偏右/被裁，但至少不黑屏）。
@@ -545,11 +587,28 @@ class VideoHandler extends FlxSubState
 
 		if (!started || !playing || !canSkip || !canSkipNow) return;
 
-		var pressed:Bool = FlxG.keys.justPressed.ANY || FlxG.mouse.justPressed;
-		#if mobile
-		for (touch in FlxG.touches.list)
+		// ★ [PE-iOS] 与 intro 对齐：iOS 上 FlxG.mouse / touches 会在开场误判 justPressed，
+		//   导致过场「一播就过」。这里同样：键盘直接认；鼠标/触摸做双重确认。
+		var pressed:Bool = FlxG.keys.justPressed.ANY;
+		if (!pressed)
 		{
-			if (touch.justPressed) pressed = true;
+			try
+			{
+				if (FlxG.mouse != null && FlxG.mouse.justPressed) pressed = true;
+			}
+			catch (e:Dynamic) {}
+		}
+		#if mobile
+		if (!pressed)
+		{
+			try
+			{
+				for (touch in FlxG.touches.list)
+				{
+					if (touch != null && touch.justPressed && touch.pressed) { pressed = true; break; }
+				}
+			}
+			catch (e:Dynamic) {}
 		}
 		#end
 
