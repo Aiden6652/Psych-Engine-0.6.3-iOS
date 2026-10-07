@@ -1,4 +1,4 @@
-name: Psych Engine 0.6.3 iOS Build
+name: Psych Engine 0.6.3 iOS Build (AE)
 
 on:
   push:
@@ -13,57 +13,108 @@ jobs:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
       # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
+      # AE 资源 Release（用户已上传：引擎包 / assets 包 / mods 包）
+      AE_REL: "Corruption资源"
+      AE_ASSETS_ZIP: "FNF.Corruption2.zip"
+      AE_MODS_ZIP: "Corruption3.zip"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 恢复仓库自带 assets / example_mods
+      # ------------------------------------------------------------------
+      # 1) 拉取 AE 的 assets / mods（从 Release，不进 git 仓库）
+      #    引擎本身由本仓库 source/ 编译，无需下载引擎包。
+      # ------------------------------------------------------------------
+      - name: 下载 AE 资源（assets + mods）从 Release
         run: |
           set -Eeuo pipefail
-          rm -rf assets resources.zip assets/preload/resources.zip mods
-          git checkout -f HEAD -- assets
-          git checkout -f HEAD -- example_mods
-          echo "assets 文件数: $(find assets -type f | wc -l)"
+          TAG=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote('${{ env.AE_REL }'))")
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
 
-      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+          mkdir -p /tmp/ae
+          echo "## 下载 assets 包"
+          curl -fL --retry 8 --retry-delay 5 -C - -o /tmp/ae/assets.zip "$BASE/${{ env.AE_ASSETS_ZIP }}"
+          echo "## 下载 mods 包"
+          curl -fL --retry 8 --retry-delay 5 -C - -o /tmp/ae/mods.zip  "$BASE/${{ env.AE_MODS_ZIP }}"
+          ls -lh /tmp/ae
+
+          # 解压（去掉各自的外层目录）
+          rm -rf /tmp/ae/a /tmp/ae/m
+          mkdir -p /tmp/ae/a /tmp/ae/m
+          ( cd /tmp/ae/a && unzip -oq /tmp/ae/assets.zip )
+          ( cd /tmp/ae/m && unzip -oq /tmp/ae/mods.zip )
+
+          echo "### assets 包外层目录 ###"
+          ls /tmp/ae/a
+          echo "### mods 包外层目录 ###"
+          ls /tmp/ae/m
+
+          # 定位真实的 assets/ 与 mods/
+          AE_ASSETS=$(find /tmp/ae/a -maxdepth 3 -type d -name assets | head -n1)
+          AE_MODS=$(find /tmp/ae/m -maxdepth 3 -type d -name mods | head -n1)
+          echo "AE_ASSETS=$AE_ASSETS"
+          echo "AE_MODS=$AE_MODS"
+          [ -n "$AE_ASSETS" ] && [ -n "$AE_MODS" ] || { echo "::error::没在包里找到 assets/ 或 mods/"; exit 1; }
+
+          # 清掉仓库里可能残留的 stock 资源，再用 AE 覆盖
+          rm -rf assets mods resources.zip assets/preload/resources.zip
+          mkdir -p assets
+          cp -R "$AE_ASSETS/." assets/
+          cp -R "$AE_MODS/."  mods/
+
+          # AE 的 modsList.txt：自动探测 mods/ 下真实文件夹，全部启用（格式 folder|1）
+          # 不写死名字 —— WeekData 还会用 getModDirectories() 兜底加载所有子目录。
+          : > modsList.txt
+          for d in mods/*/; do
+            [ -d "$d" ] && echo "$(basename "$d")|1" >> modsList.txt
+          done
+          echo "### modsList.txt 内容 ###"; cat modsList.txt
+
+          echo "### 归位后文件数 ###"
+          echo "assets: $(find assets -type f | wc -l)"
+          echo "mods : $(find mods -type f | wc -l)"
+          echo "### assets 顶层 ###"
+          ls assets
+          echo "### mods 顶层 ###"
+          ls mods
+
+      - name: 校验关键引擎改动已就位（大小写不敏感加载）
         run: |
           set -Eeuo pipefail
-          python3 tools/patch_lua_guard.py
-          grep -c "LuaGuard" source/FunkinLua.hx || true
+          echo "### SUtil.resolveCI / existsCI 必须存在 ###"
+          grep -q "resolveCI" source/SUtil.hx && echo "OK SUtil.resolveCI" || { echo "::error::缺 SUtil.resolveCI"; exit 1; }
+          grep -q "existsCI"  source/SUtil.hx && echo "OK SUtil.existsCI"  || { echo "::error::缺 SUtil.existsCI";  exit 1; }
+          echo "### Paths.hx 已接入 resolveCI ###"
+          grep -q "resolveCI" source/Paths.hx && echo "OK Paths.resolveCI" || { echo "::error::缺 Paths.resolveCI"; exit 1; }
 
-      - name: 打包内置资源 resources.zip（只放 assets，不放 mods）
+      # ------------------------------------------------------------------
+      # 2) 打包内置资源 resources.zip
+      #    顶层结构必须是 assets/ + mods/ + modsList.txt：
+      #      - assets/  → 运行时 <Documents>/assets/…（歌曲/视频/数据/音效…）
+      #      - mods/    → 运行时 <Documents>/mods/…（自定义事件/音符/脚本/图片…）
+      #      - modsList.txt → 运行时 <Documents>/modsList.txt（启用对应 Mod 文件夹）
+      #    SUtil.ensureAssets() 在【全新安装】把它解压到 Documents，
+      #    于是 AE 的全部歌曲/特效/视频/自定义事件就位。
+      #    （注意：Project.xml 第59行还会把 assets/preload 额外打进 OpenFL 的
+      #     assets library 供图片/角色 JSON 走 OpenFlAssets 加载，二者互补。）
+      # ------------------------------------------------------------------
+      - name: 打包内置资源 resources.zip（assets + mods + modsList.txt）
         run: |
           set -Eeuo pipefail
           rm -rf /tmp/pack
-          mkdir -p /tmp/pack/assets
+          mkdir -p /tmp/pack
+          cp -R assets /tmp/pack/assets
+          cp -R mods  /tmp/pack/mods
+          cp modsList.txt /tmp/pack/modsList.txt
 
-          # 解压后必须是 <Documents>/assets/<...>（例如 assets/music/freakyMenu.ogg），
-          # 不能多一层 preload。运行时 Paths.getPath()/returnSound() 全按 assets/… 找文件。
-          # 仓库里这些资源放在 assets/preload/ 下（OpenFL 的资源前缀），
-          # 所以要打 zip 时把 preload 里的内容平移到 assets/ 根下。
-          cp -R assets/preload/. /tmp/pack/assets/
-          # 字体在 assets/fonts（不在 preload 里），运行时按 assets/fonts/… 读，也要带上
-          if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
-
-          # ❗ 刻意不打包 example_mods！
-          # 之前把它当作 mods/ 一起解压，会导致：删掉重装后内置解压出一套
-          # 「只有 readme + pack.json 的空模组」，用户再放入自己的 mods 时就变成两套混合，
-          # 引擎可能把那个空模组当模组加载 → 直接崩。
-          # 现在 mods 目录改由 SUtil.ensureAssets() 解压后创建（空气泡即可），
-          # 用户的 mods 永远是干净的。
-
-          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets )
+          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets mods modsList.txt )
           mkdir -p assets/preload
           mv /tmp/resources.zip assets/preload/resources.zip
           ls -lh assets/preload/resources.zip
-          echo "### zip 内容抽样（应只有 assets/…，确认没有 preload 层也没有 mods）###"
+          echo "### zip 内容抽样（应只有 assets/、mods/、modsList.txt）###"
           unzip -l assets/preload/resources.zip | head -12
-          echo "### 确认 zip 里没有 mods ###"
-          if unzip -l assets/preload/resources.zip | grep -qE '^\s+[0-9]+\s+[0-9-]+\s+[0-9:]+\s+mods/'; then
-            echo "::error::resources.zip 里不应包含 mods，请检查打包步骤"
-            exit 1
-          fi
-          echo "OK：zip 内无 mods"
+          echo "### 校验 zip 内确有 mods 与 modsList.txt ###"
+          unzip -l assets/preload/resources.zip | grep -E 'mods/|modsList.txt' | head -5
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4

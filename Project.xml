@@ -91,7 +91,16 @@
 	</section>
 	<assets path='art/readme.txt' rename='do NOT readme.txt' />
 	<!-- <template path='mods' /> -->
-	
+
+	<!-- [AE-iOS] AE 模组资源包：SUtil.ensureAssets() 在【全新安装】时会从
+	     App 包内读这个 zip（OpenFlAssets.getBytes 候选路径，见 SUtil.hx），
+	     解压到 Documents，于是 assets/ 与 mods/ 全部就位，歌曲/特效/视频/自定义事件都能加载。
+	     zip 内部顶层目录必须是 assets/ 和 mods/（对齐 getPreloadPath='assets/$file' 与 Paths.mods）。
+	     只有 iOS 需要（PC/Android 走 library / 外部存储）。
+	     注意：CI 生成的 zip 位于 assets/preload/resources.zip，这里 rename 到
+	     assets/resources.zip —— 与 ensureAssets 的第一个候选路径一致。 -->
+	<assets path="assets/preload/resources.zip" rename="assets/resources.zip" if="ios"/>
+
 	<!-- assets path="CHANGELOG.md" rename='changelog.txt' -->
 
 	<!-- NOTE FOR FUTURE SELF SINCE FONTS ARE ALWAYS FUCKY 

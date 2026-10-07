@@ -681,7 +681,7 @@ class VideoHandler extends FlxSprite
 		if (!loaded)
 		{
 			var fileName:String = videoPath.split('/').pop();
-			var retryPath:String = SUtil.getPath() + 'assets/videos/' + fileName;
+			var retryPath:String = SUtil.resolveCI(SUtil.getPath() + 'assets/videos/' + fileName);
 			diag('[load] 首次失败，改用资源路径重试: ' + retryPath);
 			try { loaded = video.load(retryPath, options); } catch (e:Dynamic) { loaded = false; }
 			diag('[load] 重试返回值=' + loaded);
@@ -1021,10 +1021,10 @@ class VideoHandler extends FlxSprite
 		if (path == null || path.length < 1) return path;
 		if (path.indexOf('/') == 0) return path;
 
-		var candidate:String = SUtil.getPath() + path;
+		var candidate:String = SUtil.resolveCI(SUtil.getPath() + path);
 		if (FileSystem.exists(candidate)) return candidate;
 
-		var inAssets:String = SUtil.getPath() + 'assets/videos/' + path;
+		var inAssets:String = SUtil.resolveCI(SUtil.getPath() + 'assets/videos/' + path);
 		if (FileSystem.exists(inAssets)) return inAssets;
 
 		return path;

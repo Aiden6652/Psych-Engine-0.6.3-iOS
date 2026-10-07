@@ -203,7 +203,7 @@ class Paths
 			return file;
 		}
 		#end
-		return SUtil.getPath() + 'assets/videos/$key.$VIDEO_EXT';
+		return SUtil.resolveCI(SUtil.getPath() + 'assets/videos/$key.$VIDEO_EXT');
 	}
 
 	static public function sound(key:String, ?library:String):Sound
@@ -250,21 +250,21 @@ class Paths
 		if (!ignoreMods && FileSystem.exists(modFolders(key)))
 			return File.getContent(modFolders(key));
 
-		if (FileSystem.exists(SUtil.getPath() + getPreloadPath(key)))
-			return File.getContent(SUtil.getPath() + getPreloadPath(key));
+		if (SUtil.existsCI(SUtil.getPath() + getPreloadPath(key)))
+			return File.getContent(SUtil.resolveCI(SUtil.getPath() + getPreloadPath(key)));
 
 		if (currentLevel != null)
 		{
 			var levelPath:String = '';
 			if(currentLevel != 'shared') {
 				levelPath = SUtil.getPath() + getLibraryPathForce(key, currentLevel);
-				if (FileSystem.exists(levelPath))
-					return File.getContent(levelPath);
+				if (SUtil.existsCI(levelPath))
+					return File.getContent(SUtil.resolveCI(levelPath));
 			}
 
 			levelPath = SUtil.getPath() + getLibraryPathForce(key, 'shared');
-			if (FileSystem.exists(levelPath))
-				return File.getContent(levelPath);
+			if (SUtil.existsCI(levelPath))
+				return File.getContent(SUtil.resolveCI(levelPath));
 		}
 		#end
 		return Assets.getText(getPath(key, TEXT));
@@ -278,13 +278,13 @@ class Paths
 			return file;
 		}
 		#end
-		return SUtil.getPath() + 'assets/fonts/$key';
+		return SUtil.resolveCI(SUtil.getPath() + 'assets/fonts/$key');
 	}
 
 	inline static public function fileExists(key:String, type:AssetType, ?ignoreMods:Bool = false, ?library:String)
 	{
 		#if MODS_ALLOWED
-		if(FileSystem.exists(mods(currentModDirectory + '/' + key)) || FileSystem.exists(mods(key))) {
+		if(FileSystem.exists(SUtil.resolveCI(mods(currentModDirectory + '/' + key))) || FileSystem.exists(SUtil.resolveCI(mods(key)))) {
 			return true;
 		}
 		#end
@@ -381,6 +381,9 @@ class Paths
 		// I hate this so god damn much
 		var gottenPath:String = SUtil.getPath() + getPath('$path/$key.$SOUND_EXT', SOUND, library);
 		gottenPath = gottenPath.substring(gottenPath.indexOf(':') + 1, gottenPath.length);
+		// [AE-iOS] 歌曲 Inst/Voices 在 Assets/songs/<大小写混写目录>/ 下，iOS 大小写敏感，
+		// 用 resolveCI 回退到真实存在的路径（如 Blood-Moon）。
+		gottenPath = SUtil.resolveCI(gottenPath);
 		// trace(gottenPath);
 		if(!currentTrackedSounds.exists(gottenPath))
 		#if MODS_ALLOWED
@@ -458,7 +461,9 @@ class Paths
 				return fileToCheck;
 
 		}
-		return SUtil.getPath() + 'mods/' + key;
+		// [AE-iOS] mods / assets 资源都可能大小写混写（AE 原版 Windows 不区分大小写），
+		// 用 resolveCI 做大小写不敏感回退，返回真实存在的路径。
+		return SUtil.resolveCI(SUtil.getPath() + 'mods/' + key);
 	}
 
 	static public function modFolder() {

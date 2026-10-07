@@ -2171,6 +2171,99 @@ class FunkinLua {
 			#end
 		});
 
+		// [AE-iOS] VideoSprite 系统：AE 顶层 Lua 函数 makeLuaVideoSprite / addLuaVideoSprite /
+		// playVideo / resumeVideo / pauseVideo / removeLuaVideoSprite。iOS 原生完全没有，必须补齐，
+		// 否则 AE 的 31 个 mp4 视频精灵（背景视频、角色视频等）全部无法显示。
+		// 复用 hxvlc 的 FlxVideoSprite（与 VideoHandler 同款解码后端），不依赖全屏过场的单实例控制器。
+		Lua_helper.add_callback(lua, "makeLuaVideoSprite", function(tag:String, name:String, x:Float, y:Float, ?play:Bool = false, ?loop:Bool = false, ?width:Int = 1280, ?height:Int = 720) {
+			#if VIDEOS_ALLOWED
+			tag = tag.replace('.', '');
+			if(PlayState.instance.videoSprites.exists(tag)) return;
+			var vid:hxvlc.flixel.FlxVideoSprite = new hxvlc.flixel.FlxVideoSprite();
+			vid.antialiasing = ClientPrefs.globalAntialiasing;
+			vid.scrollFactor.set(0, 0);
+			vid.x = x; vid.y = y;
+			var filepath:String = Paths.video(name);
+			var inMods:String = Paths.modFolders('videos/' + name + '.mp4');
+			#if sys
+			if(!FileSystem.exists(filepath) && FileSystem.exists(inMods)) filepath = inMods;
+			#end
+			vid.load(filepath, loop ? ['--input-repeat=999999'] : null);
+			if(vid.bitmap != null) {
+				vid.bitmap.onFormatSetup.add(function():Void {
+					var bmd = vid.bitmap.bitmapData;
+					if(bmd != null && bmd.width > 1 && bmd.height > 1 && width > 0 && height > 0) {
+						var sc:Float = Math.min(width / bmd.width, height / bmd.height);
+						if(sc > 0 && sc == sc) { vid.scale.set(sc, sc); vid.updateHitbox(); }
+					}
+				});
+			}
+			PlayState.instance.videoSprites.set(tag, vid);
+			if(play) { try { vid.play(); } catch(e:Dynamic) {} }
+			#end
+		});
+
+		Lua_helper.add_callback(lua, "addLuaVideoSprite", function(tag:String, front:Bool = true) {
+			#if VIDEOS_ALLOWED
+			if(PlayState.instance.videoSprites.exists(tag)) {
+				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
+				if(vid != null && vid.parent == null) {
+					if(front) {
+						PlayState.instance.add(vid);
+					} else {
+						var position:Int = PlayState.instance.members.indexOf(PlayState.instance.gfGroup);
+						if(PlayState.instance.members.indexOf(PlayState.instance.boyfriendGroup) < position) {
+							position = PlayState.instance.members.indexOf(PlayState.instance.boyfriendGroup);
+						} else if(PlayState.instance.members.indexOf(PlayState.instance.dadGroup) < position) {
+							position = PlayState.instance.members.indexOf(PlayState.instance.dadGroup);
+						}
+						PlayState.instance.insert(position, vid);
+					}
+				}
+			}
+			#end
+		});
+
+		Lua_helper.add_callback(lua, "playVideo", function(tag:String, ?play:Bool = true) {
+			#if VIDEOS_ALLOWED
+			if(PlayState.instance.videoSprites.exists(tag)) {
+				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
+				if(vid != null) { try { if(play) vid.play(); else vid.pause(); } catch(e:Dynamic) {} }
+			}
+			#end
+		});
+
+		Lua_helper.add_callback(lua, "resumeVideo", function(tag:String) {
+			#if VIDEOS_ALLOWED
+			if(PlayState.instance.videoSprites.exists(tag)) {
+				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
+				if(vid != null) { try { vid.resume(); } catch(e:Dynamic) {} }
+			}
+			#end
+		});
+
+		Lua_helper.add_callback(lua, "pauseVideo", function(tag:String) {
+			#if VIDEOS_ALLOWED
+			if(PlayState.instance.videoSprites.exists(tag)) {
+				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
+				if(vid != null) { try { vid.pause(); } catch(e:Dynamic) {} }
+			}
+			#end
+		});
+
+		Lua_helper.add_callback(lua, "removeLuaVideoSprite", function(tag:String, ?destroy:Bool = true) {
+			#if VIDEOS_ALLOWED
+			if(PlayState.instance.videoSprites.exists(tag)) {
+				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
+				if(vid != null) {
+					try { PlayState.instance.remove(vid, true); } catch(e:Dynamic) {}
+					try { vid.destroy(); } catch(e:Dynamic) {}
+				}
+				PlayState.instance.videoSprites.remove(tag);
+			}
+			#end
+		});
+
 		Lua_helper.add_callback(lua, "playMusic", function(sound:String, volume:Float = 1, loop:Bool = false) {
 			FlxG.sound.playMusic(Paths.music(sound), volume, loop);
 		});
@@ -2873,21 +2966,21 @@ class FunkinLua {
 		
 		for (folder in foldersToCheck)
 		{
-			if(FileSystem.exists(SUtil.getPath() + folder))
+			if(FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + folder)))
 			{
 				var frag:String = folder + name + '.frag';
 				var vert:String = folder + name + '.vert';
 				var found:Bool = false;
-				if(FileSystem.exists(SUtil.getPath() + frag))
+				if(FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + frag)))
 				{
-					frag = File.getContent(SUtil.getPath() + frag);
+					frag = File.getContent(SUtil.resolveCI(SUtil.getPath() + frag));
 					found = true;
 				}
 				else frag = null;
 
-				if(FileSystem.exists(SUtil.getPath() + vert))
+				if(FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + vert)))
 				{
-					vert = File.getContent(SUtil.getPath() + vert);
+					vert = File.getContent(SUtil.resolveCI(SUtil.getPath() + vert));
 					found = true;
 				}
 				else vert = null;

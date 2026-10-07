@@ -109,6 +109,11 @@ class PlayState extends MusicBeatState
 	public var variables:Map<String, Dynamic> = new Map();
 	public var modchartTweens:Map<String, FlxTween> = new Map<String, FlxTween>();
 	public var modchartSprites:Map<String, ModchartSprite> = new Map<String, ModchartSprite>();
+	#if VIDEOS_ALLOWED
+	// [AE-iOS] AE 的 VideoSprite 系统（makeLuaVideoSprite 等）需要独立的视频精灵表，
+	// 因为 modchartSprites 类型受限为 ModchartSprite，FlxVideoSprite 不能塞进去。
+	public var videoSprites:Map<String, hxvlc.flixel.FlxVideoSprite> = new Map<String, hxvlc.flixel.FlxVideoSprite>();
+	#end
 	public var modchartTimers:Map<String, FlxTimer> = new Map<String, FlxTimer>();
 	public var modchartSounds:Map<String, FlxSound> = new Map<String, FlxSound>();
 	public var modchartTexts:Map<String, ModchartText> = new Map<String, ModchartText>();
@@ -966,6 +971,10 @@ class PlayState extends MusicBeatState
 
 		if (!stageData.hide_girlfriend)
 		{
+			// [AE-iOS] AE 模组谱面可能引用【AE自己都没打包】的角色（如 SenpaiAD / spirit disk3），
+			//   直接 new Character 会因找不到贴图而崩。这里先探测存在性，缺失则回退默认角色，
+			//   保证「歌能进、能玩」，而不是一进游戏就闪退。
+			if(!characterExists(gfVersion)) gfVersion = 'gf';
 			gf = new Character(0, 0, gfVersion);
 			startCharacterPos(gf);
 			gf.scrollFactor.set(0.95, 0.95);
@@ -994,12 +1003,17 @@ class PlayState extends MusicBeatState
 			}
 		}
 
-		dad = new Character(0, 0, SONG.player2);
+		// [AE-iOS] 同上：dad / boyfriend 也要做存在性回退，避免缺角色直接崩
+		var dadChar:String = SONG.player2;
+		if(!characterExists(dadChar)) dadChar = 'dad';
+		dad = new Character(0, 0, dadChar);
 		startCharacterPos(dad, true);
 		dadGroup.add(dad);
 		startCharacterLua(dad.curCharacter);
 
-		boyfriend = new Boyfriend(0, 0, SONG.player1);
+		var bfChar:String = SONG.player1;
+		if(!characterExists(bfChar)) bfChar = 'bf';
+		boyfriend = new Boyfriend(0, 0, bfChar);
 		startCharacterPos(boyfriend);
 		boyfriendGroup.add(boyfriend);
 		startCharacterLua(boyfriend.curCharacter);
@@ -1567,6 +1581,25 @@ class PlayState extends MusicBeatState
 		}
 	}
 
+	// [AE-iOS] 探测角色资源是否存在（AE 模组谱面可能引用 AE 自己都没打包的角色）。
+	// 走 PE 原生三级回退：mods/characters/<n>.json → Documents/assets/characters/<n>.json → library。
+	// mods 与 Documents 用 FileSystem 判存在；library 走 Paths.fileExists（内含 OpenFlAssets 判断）。
+	function characterExists(name:String):Bool
+	{
+		if(name == null || name.length < 1) return false;
+		var rel:String = 'characters/' + name + '.json';
+		#if sys
+		if(FileSystem.exists(Paths.modFolders(rel))) return true;
+		if(FileSystem.exists(SUtil.getPath() + Paths.getPreloadPath(rel))) return true;
+		#end
+		try
+		{
+			if(Paths.fileExists(rel, TEXT)) return true;
+		}
+		catch (e:Dynamic) {}
+		return false;
+	}
+
 	function startCharacterLua(name:String)
 	{
 		#if LUA_ALLOWED
@@ -1601,6 +1634,9 @@ class PlayState extends MusicBeatState
 	}
 
 	public function getLuaObject(tag:String, text:Bool=true):FlxSprite {
+		#if VIDEOS_ALLOWED
+		if(videoSprites.exists(tag)) return videoSprites.get(tag);
+		#end
 		if(modchartSprites.exists(tag)) return modchartSprites.get(tag);
 		if(text && modchartTexts.exists(tag)) return modchartTexts.get(tag);
 		if(variables.exists(tag)) return variables.get(tag);
@@ -1623,6 +1659,14 @@ class PlayState extends MusicBeatState
 		inCutscene = true;
 
 		var filepath:String = Paths.video(name);
+		// [AE-iOS] AE 的视频除 assets/videos 外也放在 mods/videos（VideoSprite API 文档明确两者都支持），
+		//   这里补 mods 回退，否则 mods 里的视频（背景视频/角色视频）会找不到而黑屏跳过。
+		var inMods:String = Paths.modFolders('videos/' + name + '.mp4');
+		#if sys
+		if(!FileSystem.exists(filepath) && FileSystem.exists(inMods)) filepath = inMods;
+		#else
+		if(!OpenFlAssets.exists(filepath) && OpenFlAssets.exists(inMods)) filepath = inMods;
+		#end
 		#if sys
 		if(!FileSystem.exists(filepath))
 		#else
@@ -2529,7 +2573,21 @@ class PlayState extends MusicBeatState
 				swagNote.sustainLength = songNotes[2];
 				swagNote.gfNote = (section.gfSection && (songNotes[1]<4));
 				swagNote.noteType = songNotes[3];
-				if(!Std.isOfType(songNotes[3], String)) swagNote.noteType = editors.ChartingState.noteTypeList[songNotes[3]]; //Backward compatibility + compatibility with Week 7 charts
+				// [AE-iOS] AE 谱面的 sectionNotes 可能是 3 元素 [time, data, sustain]
+				//   （无 noteType），此时 songNotes[3] 为 null。原代码
+				//   `if(!Std.isOfType(songNotes[3], String)) noteType = noteTypeList[songNotes[3]]`
+				//   会用 null 去索引 noteTypeList → 崩（AE 模组进歌即崩的根因）。
+				//   修复：null/越界一律回落到默认 ''，不再走 noteTypeList。
+				if(swagNote.noteType == null) {
+					swagNote.noteType = '';
+				}
+				else if(!Std.isOfType(songNotes[3], String)) {
+					var typeIdx:Int = Std.int(songNotes[3]);
+					if(typeIdx >= 0 && typeIdx < editors.ChartingState.noteTypeList.length)
+						swagNote.noteType = editors.ChartingState.noteTypeList[typeIdx];
+					else
+						swagNote.noteType = '';
+				} //Backward compatibility + compatibility with Week 7 charts
 
 				swagNote.scrollFactor.set();
 
@@ -3704,18 +3762,21 @@ class PlayState extends MusicBeatState
 			case 'Kill Henchmen':
 				killHenchmen();
 
-			case 'Add Camera Zoom':
-				// [PE-iOS] ⚠ 这是模组作者【显式】写的事件，【故意不纳入】PEI_AUTO_CAMZOOM。
-				//   策略：只关「引擎自动」的相机缩放，模组主动要的特效一律保留。
-				if(ClientPrefs.camZooms && FlxG.camera.zoom < 1.35) {
-					var camZoom:Float = Std.parseFloat(value1);
-					var hudZoom:Float = Std.parseFloat(value2);
-					if(Math.isNaN(camZoom)) camZoom = 0.015;
-					if(Math.isNaN(hudZoom)) hudZoom = 0.03;
+		case 'Add Camera Zoom':
+			// [PE-iOS] ⚠ 这是模组作者【显式】写的事件，【故意不纳入】PEI_AUTO_CAMZOOM。
+			//   策略：只关「引擎自动」的相机缩放，模组主动要的特效一律保留。
+			if(ClientPrefs.camZooms && FlxG.camera.zoom < 1.35) {
+				var camZoom:Float = Std.parseFloat(value1);
+				var hudZoom:Float = Std.parseFloat(value2);
+				if(Math.isNaN(camZoom)) camZoom = 0.015;
+				if(Math.isNaN(hudZoom)) hudZoom = 0.03;
 
-					FlxG.camera.zoom += camZoom;
-					camHUD.zoom += hudZoom;
-				}
+				FlxG.camera.zoom += camZoom;
+				camHUD.zoom += hudZoom;
+			}
+			// [AE-iOS] AE 新增回调 onZoom：在相机缩放变化时通知模组
+			//   （AE 的 stages/nullstage.lua 等用 function onZoom() 监听缩放特效）。
+			callOnLuas('onZoom', []);
 
 			case 'Trigger BG Ghouls':
 				if(curStage == 'schoolEvil' && !ClientPrefs.lowQuality) {
@@ -4491,6 +4552,11 @@ class PlayState extends MusicBeatState
 				spr.resetAnim = 0;
 			}
 			callOnLuas('onKeyPress', [key]);
+			// [AE-iOS] AE 新增回调 onKeyPressP2：P2（对手方）按键。
+			//   AE 的双打脚本（如 "Play as opponent both sides"）依赖它驱动 P2 打歌。
+			//   iOS PE 目前只有 player1 输入，故此处随 onKeyPress 一并转发同一 key，
+			//   让模组逻辑不因缺回调而报 nil；P2 的 AI/真人分流可用 runHaxeCode 二次接管。
+			callOnLuas('onKeyPressP2', [key]);
 		}
 		//trace('pressed: ' + controlArray);
 	}
@@ -4869,6 +4935,9 @@ class PlayState extends MusicBeatState
 			var leData:Int = Math.round(Math.abs(note.noteData));
 			var leType:String = note.noteType;
 			callOnLuas('goodNoteHit', [notes.members.indexOf(note), leData, leType, isSus]);
+			// [AE-iOS] AE 新增回调 onNoteColor：音符被打中、颜色/角度变化时通知模组
+			//   （AE 的 HiveMind / Null-and-Void 等 modchart 用 function onNoteColor() 做染色特效）。
+			callOnLuas('onNoteColor', [notes.members.indexOf(note), leData, leType, isSus]);
 
 			if (!note.isSustainNote)
 			{

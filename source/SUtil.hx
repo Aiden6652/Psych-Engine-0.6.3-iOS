@@ -176,6 +176,75 @@ class SUtil
 	#end
 	// =====================================================================
 
+	/**
+	 * [AE-iOS] 大小写不敏感路径解析。
+	 *
+	 * iOS / Linux 文件系统大小写敏感，而 AE 的 Windows 原版资源大量混用大小写
+	 * （如 assets/songs/Blood-Moon、Full-Clip），PE 的 Paths.formatToSongPath 又强制转小写，
+	 * 于是 Assets.getText / Sound.fromFile 在 iOS 上找不到文件 —— 表现为「歌单一片空白 / 进歌即崩」。
+	 * Windows 上因为文件系统不区分大小写所以一切正常，这正是 AE 原版能跑、iOS 跑不起来的根因。
+	 *
+	 * 本函数在「精确路径不存在」时，按目录逐段做大小写不敏感匹配，返回真实存在的路径；
+	 * 精确存在时直接原样返回（零开销）。非 sys 目标（web）原样返回。
+	 */
+	public static function resolveCI(orig:String):String
+	{
+		#if sys
+		if (orig == null || orig.length == 0) return orig;
+		var path:String = orig.split('\\').join('/');
+		if (FileSystem.exists(path)) return path;
+
+		var abs:Bool = path.charAt(0) == '/';
+		var segs:Array<String> = path.split('/');
+		var buf:String = '';
+		for (seg in segs)
+		{
+			if (seg.length == 0) continue;
+			var candidate:String = (buf.length == 0) ? seg : buf + '/' + seg;
+			if (FileSystem.exists(candidate)) { buf = candidate; continue; }
+
+			// 当前段不存在：在父目录里做大小写不敏感匹配
+			var parentDir:String = (buf.length == 0) ? (abs ? '/' : '.') : buf;
+			var found:String = null;
+			if (FileSystem.exists(parentDir))
+			{
+				try
+				{
+					var entries:Array<String> = FileSystem.readDirectory(parentDir);
+					var lower:String = seg.toLowerCase();
+					for (e in entries)
+					{
+						if (e.toLowerCase() == lower) { found = e; break; }
+					}
+				}
+				catch (e:Dynamic) {}
+			}
+			if (found != null)
+			{
+				buf = (buf.length == 0) ? found : buf + '/' + found;
+			}
+			else
+			{
+				buf = candidate;
+			}
+		}
+		if (abs && buf.length > 0 && buf.charAt(0) != '/') buf = '/' + buf;
+		return buf;
+		#else
+		return orig;
+		#end
+	}
+
+	public static function existsCI(path:String):Bool
+	{
+		#if sys
+		if (FileSystem.exists(path)) return true;
+		return FileSystem.exists(resolveCI(path));
+		#else
+		return true;
+		#end
+	}
+
 	public static function doTheCheck()
 	{
 		#if ios
