@@ -63,6 +63,15 @@ jobs:
           fi
 
           rm -rf assets mods resources.zip assets/preload/resources.zip
+
+          # 先恢复仓库自带 assets / example_mods：
+          # Project.xml 声明了 assets/fonts(第111行)、assets/secrets、example_mods 等，
+          # AE 包里没有这些目录，若整目录删光会导致 lime 报
+          # "Could not find asset path"。所以必须先恢复 stock 再叠加 AE。
+          git checkout -f HEAD -- assets
+          git checkout -f HEAD -- example_mods || true
+
+          # 再叠加 AE 资源：AE 覆盖同名文件，stock 独有目录保留
           mkdir -p assets
           cp -R "$AE_ASSETS/." assets/
           cp -R "$AE_MODS/."  mods/
