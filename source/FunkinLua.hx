@@ -2207,7 +2207,9 @@ class FunkinLua {
 			#if VIDEOS_ALLOWED
 			if(PlayState.instance.videoSprites.exists(tag)) {
 				var vid:hxvlc.flixel.FlxVideoSprite = PlayState.instance.videoSprites.get(tag);
-				if(vid != null && vid.parent == null) {
+				// [AE-iOS] hxvlc 1.9.3 的 FlxVideoSprite 没有 parent 字段，
+				// 改用 members 判断是否已加入显示列表，避免重复 add
+				if(vid != null && PlayState.instance.members.indexOf(vid) < 0) {
 					if(front) {
 						PlayState.instance.add(vid);
 					} else {
