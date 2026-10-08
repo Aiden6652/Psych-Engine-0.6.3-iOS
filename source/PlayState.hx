@@ -113,6 +113,7 @@ class PlayState extends MusicBeatState
 	// [AE-iOS] AE 的 VideoSprite 系统（makeLuaVideoSprite 等）需要独立的视频精灵表，
 	// 因为 modchartSprites 类型受限为 ModchartSprite，FlxVideoSprite 不能塞进去。
 	public var videoSprites:Map<String, hxvlc.flixel.FlxVideoSprite> = new Map<String, hxvlc.flixel.FlxVideoSprite>();
+	public var isVideoPlaying:Bool = false; // [AE-iOS] AE 模组用 isVideoPlaying 查询视频是否在播放
 	#end
 	public var modchartTimers:Map<String, FlxTimer> = new Map<String, FlxTimer>();
 	public var modchartSounds:Map<String, FlxSound> = new Map<String, FlxSound>();
@@ -283,6 +284,7 @@ class PlayState extends MusicBeatState
 	public var camHUD:FlxCamera;
 	public var camGame:FlxCamera;
 	public var camOther:FlxCamera;
+	public var camVideo:FlxCamera; // [AE-iOS] AE 视频层独立相机（VideoSprite 置顶绘制，不干扰游戏相机）
 	public var cameraSpeed:Float = 1;
 
 	var dialogue:Array<String> = ['blah blah blah', 'coolswag'];
@@ -466,6 +468,9 @@ class PlayState extends MusicBeatState
 		FlxG.cameras.reset(camGame);
 		FlxG.cameras.add(camHUD, false);
 		FlxG.cameras.add(camOther, false);
+		camVideo = new FlxCamera();
+		camVideo.bgColor.alpha = 0; // [AE-iOS] 透明，仅绘制视频层
+		FlxG.cameras.add(camVideo, false);
 		grpNoteSplashes = new FlxTypedGroup<NoteSplash>();
 
 		FlxG.cameras.setDefaultDrawTarget(camGame, true);
@@ -1655,10 +1660,11 @@ class PlayState extends MusicBeatState
 
 	public function startVideo(name:String)
 	{
-		#if VIDEOS_ALLOWED
-		inCutscene = true;
+	#if VIDEOS_ALLOWED
+	inCutscene = true;
+	isVideoPlaying = true; // [AE-iOS] 标记视频正在播放，供 AE 模组查询
 
-		var filepath:String = Paths.video(name);
+	var filepath:String = Paths.video(name);
 		// [AE-iOS] AE 的视频除 assets/videos 外也放在 mods/videos（VideoSprite API 文档明确两者都支持），
 		//   这里补 mods 回退，否则 mods 里的视频（背景视频/角色视频）会找不到而黑屏跳过。
 		var inMods:String = Paths.modFolders('videos/' + name + '.mp4');
@@ -1674,6 +1680,7 @@ class PlayState extends MusicBeatState
 		#end
 		{
 			FlxG.log.warn('Couldnt find video file: ' + name);
+			isVideoPlaying = false;
 			startAndEnd();
 			return;
 		}
@@ -1682,6 +1689,7 @@ class PlayState extends MusicBeatState
 		video.playVideo(filepath);
 		video.finishCallback = function()
 		{
+			isVideoPlaying = false; // [AE-iOS] 视频播放结束
 			startAndEnd();
 			return;
 		}

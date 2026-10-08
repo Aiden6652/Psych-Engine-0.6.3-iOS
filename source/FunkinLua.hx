@@ -3177,6 +3177,7 @@ class FunkinLua {
 		switch(cam.toLowerCase()) {
 			case 'camhud' | 'hud': return PlayState.instance.camHUD;
 			case 'camother' | 'other': return PlayState.instance.camOther;
+			case 'camvideo' | 'video': return PlayState.instance.camVideo; // [AE-iOS] AE 视频层相机
 		}
 		return PlayState.instance.camGame;
 	}
