@@ -13,114 +13,19 @@ jobs:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
       # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
-      # AE 资源 Release（用户已上传：引擎包 / assets 包 / mods 包）
-      AE_REL: "Corruption资源"
-      AE_ASSETS_ZIP: "FNF.Corruption2.zip"
-      AE_MODS_ZIP: "Corruption3.zip"
 
     steps:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------------
-      # 1) 拉取 AE 的 assets / mods（从 Release，不进 git 仓库）
-      #    引擎本身由本仓库 source/ 编译，无需下载引擎包。
+      # 纯裸引擎：只用仓库自带 assets 编译，不下载/不打包任何 AE 资源。
+      # app 图标使用仓库根目录的 icon16/32/64/OG.png（Soul BF 头像）。
       # ------------------------------------------------------------------
-      - name: 下载 AE 资源（assets + mods）从 Release
-        env:
-          AE_REL: "Corruption资源"
-          AE_ASSETS_ZIP: "FNF.Corruption2.zip"
-          AE_MODS_ZIP: "Corruption3.zip"
-          REPO: ${{ github.repository }}
-        run: |
-          set -Eeuo pipefail
-          TAG=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ['AE_REL']))")
-          BASE="https://github.com/${REPO}/releases/download/${TAG}"
-
-          mkdir -p /tmp/ae
-          echo "## 下载 assets 包"
-          curl -fL --retry 8 --retry-delay 5 -C - -o /tmp/ae/assets.zip "${BASE}/${AE_ASSETS_ZIP}"
-          echo "## 下载 mods 包"
-          curl -fL --retry 8 --retry-delay 5 -C - -o /tmp/ae/mods.zip  "${BASE}/${AE_MODS_ZIP}"
-          ls -lh /tmp/ae
-
-          rm -rf /tmp/ae/a /tmp/ae/m
-          mkdir -p /tmp/ae/a /tmp/ae/m
-          ( cd /tmp/ae/a && unzip -oq /tmp/ae/assets.zip )
-          ( cd /tmp/ae/m && unzip -oq /tmp/ae/mods.zip )
-
-          echo "### assets 包外层目录 ###"
-          ls /tmp/ae/a
-          echo "### mods 包外层目录 ###"
-          ls /tmp/ae/m
-
-          AE_ASSETS=$(find /tmp/ae/a -maxdepth 3 -type d -name assets | head -n1)
-          AE_MODS=$(find /tmp/ae/m -maxdepth 3 -type d -name mods | head -n1)
-          echo "AE_ASSETS=$AE_ASSETS"
-          echo "AE_MODS=$AE_MODS"
-          if [ -z "$AE_ASSETS" ] || [ -z "$AE_MODS" ]; then
-            echo "AE 包里没找到 assets/ 或 mods/"
-            exit 1
-          fi
-
-          rm -rf assets mods resources.zip assets/preload/resources.zip
-
-          # 先恢复仓库自带 assets / example_mods：
-          # Project.xml 声明了 assets/fonts(第111行)、assets/secrets、example_mods 等，
-          # AE 包里没有这些目录，若整目录删光会导致 lime 报
-          # "Could not find asset path"。所以必须先恢复 stock 再叠加 AE。
-          git checkout -f HEAD -- assets
-          git checkout -f HEAD -- example_mods || true
-
-          # 再叠加 AE 资源：AE 覆盖同名文件，stock 独有目录保留
-          mkdir -p assets
-          cp -R "$AE_ASSETS/." assets/
-          cp -R "$AE_MODS/."  mods/
-
-          : > modsList.txt
-          for d in mods/*/; do
-            [ -d "$d" ] && echo "$(basename "$d")|1" >> modsList.txt
-          done
-          echo "### modsList.txt 内容 ###"
-          cat modsList.txt
-
-          echo "assets 文件数: $(find assets -type f | wc -l)"
-          echo "mods 文件数: $(find mods -type f | wc -l)"
-
-
       - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
         run: |
           set -Eeuo pipefail
           python3 tools/patch_lua_guard.py
           grep -c "LuaGuard" source/FunkinLua.hx || true
-
-      # ------------------------------------------------------------------
-      # 2) 打包内置资源 resources.zip
-      #    顶层结构必须是 assets/ + mods/ + modsList.txt：
-      #      - assets/  -> 运行时 <Documents>/assets/…
-      #      - mods/    -> 运行时 <Documents>/mods/…
-      #      - modsList.txt -> 运行时 <Documents>/modsList.txt（启用对应 Mod 文件夹）
-      #    SUtil.ensureAssets() 在全新安装时把它解压到 Documents，
-      #    于是 AE 的全部歌曲/特效/视频/自定义事件就位。
-      # ------------------------------------------------------------------
-      - name: 打包内置资源 resources.zip（assets + mods + modsList.txt）
-        run: |
-          set -Eeuo pipefail
-          rm -rf /tmp/pack
-          mkdir -p /tmp/pack
-          cp -R assets /tmp/pack/assets
-          cp -R mods  /tmp/pack/mods
-          cp modsList.txt /tmp/pack/modsList.txt
-
-          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets mods modsList.txt )
-          mkdir -p assets/preload
-          mv /tmp/resources.zip assets/preload/resources.zip
-          ls -lh assets/preload/resources.zip
-          echo "### zip 内容抽样（应只有 assets/、mods/、modsList.txt）###"
-          unzip -l assets/preload/resources.zip | head -12
-          echo "### 校验 zip 内确有 modsList.txt ###"
-          unzip -l assets/preload/resources.zip | grep "modsList.txt"
-
-
 
       - name: 缓存 haxelib 库
         uses: actions/cache@v4
@@ -259,9 +164,6 @@ jobs:
           echo "产物: $APP"
           du -sh "$APP"
           if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
-          if [ ! -f "$APP/assets/resources.zip" ]; then
-            cp -f assets/preload/resources.zip "$APP/assets/resources.zip"
-          fi
           find "$APP" -name "*.mp4" -delete || true
           rm -rf Payload *.ipa
           mkdir -p Payload
