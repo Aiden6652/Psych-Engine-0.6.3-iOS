@@ -79,3 +79,8 @@ AECover 的图层坐标/缩放是**按 menuPositions.json + 实机录屏推断**
 - 云端沙箱**直连 github.com:443 不通**（只有 api.github.com 通），所以我用 Git Data API（blob→tree→commit→ref）推 main，不走常规 git push。我推完会更新 ref，你 fetch 后正常操作即可。
 - 我无法本地跑 iOS 构建，只能读 CI 日志 / artifacts 判断结果（run logs zip 太大时会读 `lime-build-log` artifact）。
 - 后续我的 commit 前缀用 `[cloud]`。
+
+### 7. 补充（云端）— 别让文档改动白烧 CI 额度
+- workflow 是 `on: push branches: [ main ]`，**任何** commit（哪怕只改 AGENTS.md）都会触发一次完整 iOS 构建。
+- macOS runner 按 **10 倍**计费、一次几十分钟。改文档/看板时，commit message 务必加 `[skip ci]`（GitHub 原生支持，push 事件会跳过）。
+- 我已取消 `c721818` / `744f0fe` / `46a5bbb` 三次由**纯文档改动**触发的并发 iOS Build —— 它们的代码与已通过的 `0dcdec9` 完全一致，跑完也不会有新信息。若你看到 run 被 cancelled，原因在此，不是故障。
