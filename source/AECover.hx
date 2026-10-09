@@ -1,16 +1,20 @@
 package;
 
 /**
- * AE (APlayer's Engine) 动态封面 / 主菜单分层渲染器
- * 数据驱动：读取 assets/data/menuData.json + menuPositions.json，
- * 按坐标合成各图层。数据或素材缺失时静默回退到 PE 默认菜单，绝不抛异常。
+ * [AE-iOS] AE 主菜单动态还原器
  *
- * 注：AE 原版这些逻辑在闭源 exe 里（SoftCodeMenu）。此处为在 PE 框架上的
- * 视觉还原，图层命名/坐标沿用 menuPositions.json 的编辑器数据。
+ * 读取**外部资源**（iPad 上 PE 的 mods/ 或 assets/）中的：
+ *   data/menuData.json、data/menuPositions.json
+ * 并用 AE 真实素材（menus/mainmenu/*）重绘主菜单背景。
+ *
+ * 关键：必须走 mods 感知的 Paths.*（Paths.getTextFromFile / Paths.image /
+ * Paths.getSparrowAtlas），不能用 Assets.getText / Assets.exists ——
+ * 后者只读打进包里的资源，裸引擎下永远读不到外部资源。
+ *
+ * 任何数据/素材缺失都静默降级到 PE 默认菜单，绝不抛异常。
  */
 import flixel.FlxSprite;
 import flixel.FlxG;
-import openfl.utils.Assets;
 import haxe.Json;
 import MainMenuState;
 
@@ -20,26 +24,27 @@ class AECover
 	public static var menuPos:Dynamic = null;
 	private static var loaded:Bool = false;
 
-	/** 尝试加载菜单数据（只加载一次）。任何失败都静默忽略。 */
+	/** 尝试加载菜单配方（只一次）。任何失败静默忽略。 */
 	public static function tryLoad():Void
 	{
 		if (loaded) return;
 		loaded = true;
-		try
-		{
-			var d:String = Assets.getText('assets/data/menuData.json');
-			var p:String = Assets.getText('assets/data/menuPositions.json');
-			if (d != null && d.length > 2) menuData = Json.parse(d);
-			if (p != null && p.length > 2) menuPos = Json.parse(p);
-		}
-		catch (e:Dynamic)
-		{
-			menuData = null;
-			menuPos = null;
-		}
+		menuData = readJson('data/menuData.json');
+		menuPos  = readJson('data/menuPositions.json');
 	}
 
-	/** 是否启用 AE 动态封面。useOldMenu=true 或数据缺失则返回 false。 */
+	static function readJson(key:String):Dynamic
+	{
+		try
+		{
+			var s:String = Paths.getTextFromFile(key);
+			if (s != null && s.length > 2) return Json.parse(s);
+		}
+		catch (e:Dynamic) {}
+		return null;
+	}
+
+	/** 是否启用 AE 主菜单。useOldMenu=true 或数据缺失 → false（走 PE 默认）。 */
 	public static function useAE():Bool
 	{
 		tryLoad();
@@ -48,54 +53,38 @@ class AECover
 		return true;
 	}
 
-	static function pos(key:String):Array<Float>
-	{
-		if (menuPos == null) return null;
-		var v:Dynamic = Reflect.field(menuPos, key);
-		if (v == null) return null;
-		var arr:Array<Float> = [cast v[0], cast v[1]];
-		return arr;
-	}
-
-	/** menuPositions 里 [-3.7,-3.7] 这类异常值是「自动居中/全屏」哨兵。 */
-	static function isCentered(p:Array<Float>):Bool
-	{
-		return p != null && (p[0] <= -3.0 || p[1] <= -3.0);
-	}
-
-	static function safeImage(name:String):FlxSprite
+	static function img(name:String):FlxSprite
 	{
 		try
 		{
-			if (!Assets.exists('assets/images/${name}.png')) return null;
-			var s:FlxSprite = new FlxSprite().loadGraphic(Paths.image(name));
+			var s:FlxSprite = new FlxSprite();
+			s.loadGraphic(Paths.image(name));
 			if (s.graphic == null) return null;
 			return s;
 		}
-		catch (e:Dynamic)
-		{
-			return null;
-		}
+		catch (e:Dynamic) { return null; }
 	}
 
-	static function place(spr:FlxSprite, key:String):Void
+	/** 等比放大铺满屏幕并居中。 */
+	static function fitFull(spr:FlxSprite):Void
 	{
-		var p = pos(key);
-		if (p == null || isCentered(p))
+		try
 		{
-			spr.setGraphicSize(FlxG.width, FlxG.height);
-			spr.updateHitbox();
-			spr.setPosition(0, 0);
+			var sc:Float = Math.max(FlxG.width / spr.width, FlxG.height / spr.height);
+			if (sc > 0 && sc == sc) // 排除 NaN
+			{
+				spr.scale.set(sc, sc);
+				spr.updateHitbox();
+			}
+			spr.setPosition((FlxG.width - spr.width) / 2, (FlxG.height - spr.height) / 2);
 		}
-		else
-		{
-			spr.setPosition(p[0], p[1]);
-		}
+		catch (e:Dynamic) {}
 	}
 
 	/**
-	 * 在 MainMenuState 上叠加 AE 动态封面。
-	 * 会隐藏 PE 默认菜单项，使封面成为主视觉（菜单项交互模块后续单独还原）。
+	 * 在 MainMenuState 上叠加 AE 主菜单视觉。
+	 * 目前恢复：放映机底色 + 光束 + BF 浮动立绘。
+	 * （菜单文字/交互、STORY 页、freeplay 电子钟等后续阶段单独还原。）
 	 */
 	public static function apply(state:MainMenuState):Void
 	{
@@ -103,95 +92,41 @@ class AECover
 
 		try
 		{
+			// 关掉 PE 默认品红底，改用 AE 放映机底色
 			if (state.magenta != null) state.magenta.visible = false;
-			if (state.menuItems != null) state.menuItems.visible = false;
 
-			// 黑底
-			var black:FlxSprite = safeImage('black_HM');
-			if (black != null)
-			{
-				black.setGraphicSize(FlxG.width, FlxG.height);
-				black.updateHitbox();
-				black.setPosition(0, 0);
-				black.alpha = 0.85;
-				state.add(black);
-			}
+			// 底色：放映机场景
+			var bg:FlxSprite = img('menus/mainmenu/right1');
+			if (bg != null) { fitFull(bg); state.add(bg); }
 
-			// 水面动画（视频层）；失败则退化为静态蓝底
-			var waterOK:Bool = false;
-			#if VIDEOS_ALLOWED
-			try
-			{
-				var vid:hxvlc.flixel.FlxVideoSprite = new hxvlc.flixel.FlxVideoSprite();
-				vid.antialiasing = ClientPrefs.globalAntialiasing;
-				vid.scrollFactor.set(0, 0);
-				var filepath:String = Paths.video('water');
-				var inMods:String = Paths.modFolders('videos/water.mp4');
-				#if sys
-				if (!sys.io.FileSystem.exists(filepath) && sys.io.FileSystem.exists(inMods)) filepath = inMods;
-				#end
-				vid.load(filepath, ['--input-repeat=999999']);
-				if (vid.bitmap != null)
-				{
-					vid.bitmap.onFormatSetup.add(function():Void
-					{
-						var bmd = vid.bitmap.bitmapData;
-						if (bmd != null && bmd.width > 1 && bmd.height > 1)
-						{
-							var sc:Float = Math.min(FlxG.width / bmd.width, FlxG.height / bmd.height);
-							if (sc > 0 && sc == sc) { vid.scale.set(sc, sc); vid.updateHitbox(); }
-						}
-					});
-				}
-				try { vid.play(); } catch (e:Dynamic) {}
-				state.add(vid);
-				waterOK = true;
-			}
-			catch (e:Dynamic) { waterOK = false; }
-			#end
-			if (!waterOK)
-			{
-				var wb:FlxSprite = safeImage('menuBGBlue');
-				if (wb != null)
-				{
-					wb.setGraphicSize(FlxG.width, FlxG.height);
-					wb.updateHitbox();
-					wb.setPosition(0, 0);
-					state.add(wb);
-				}
-			}
+			// 光束叠加
+			var rays:FlxSprite = img('menus/mainmenu/lightRays');
+			if (rays != null) { fitFull(rays); rays.alpha = 0.7; state.add(rays); }
 
-			// 大图（menuArt）
-			var art:FlxSprite = safeImage('menuArtBySarasacuni');
-			if (art != null) { place(art, 'menuArt_position'); state.add(art); }
-
-			// 眼睛发光（menuEyes / EYE）
-			var eyes:FlxSprite = safeImage('eyemenuglow');
-			if (eyes != null) { place(eyes, 'menuEyes_position'); state.add(eyes); }
-
-			// BF
-			var bf:FlxSprite = safeImage('menuBF');
-			if (bf != null) { place(bf, 'BF_position'); state.add(bf); }
-
-			// SoulBF
-			var sbf:FlxSprite = safeImage('freeplaySOUL');
-			if (sbf != null) { place(sbf, 'SoulBF_position'); state.add(sbf); }
-
-			// logo（corruptionLogoPINK）
-			var logo:FlxSprite = safeImage('corruptionLogoPINK');
-			if (logo != null) { place(logo, 'logo_position'); state.add(logo); }
-
-			// ENTER 提示
-			var enter:FlxSprite = safeImage('titleEnter');
-			if (enter != null) { place(enter, 'enterReal_position'); state.add(enter); }
-
-			// playable 文本
-			var pl:FlxSprite = safeImage('playable');
-			if (pl != null) { place(pl, 'playableTxt_position'); state.add(pl); }
+			// BF 浮动立绘
+			addFloatingBF(state);
 		}
 		catch (e:Dynamic)
 		{
-			trace('AECover.apply failed: ' + e);
+			trace('[AE-iOS] AECover.apply failed: ' + e);
 		}
+	}
+
+	static function addFloatingBF(state:MainMenuState):Void
+	{
+		try
+		{
+			var spr:FlxSprite = new FlxSprite();
+			spr.frames = Paths.getSparrowAtlas('menus/mainmenu/floatingBf');
+			if (spr.frames == null) return;
+			spr.animation.addByPrefix('float', 'BfFloat', 12, true);
+			spr.animation.play('float');
+			spr.antialiasing = ClientPrefs.globalAntialiasing;
+			spr.scale.set(0.55, 0.55);
+			spr.updateHitbox();
+			spr.setPosition(FlxG.width * 0.08, FlxG.height * 0.16);
+			state.add(spr);
+		}
+		catch (e:Dynamic) {}
 	}
 }
