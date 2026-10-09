@@ -65,9 +65,9 @@ jobs:
           set -Eeuo pipefail
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
           haxelib install openfl 9.1.0 --always
-          haxelib install flixel 4.11.0 --always
-          haxelib install flixel-addons 2.11.0 --always
-          haxelib install flixel-ui 2.4.0 --always
+          haxelib install flixel 5.0.0 --always
+          haxelib install flixel-addons 3.3.2 --always
+          haxelib install flixel-ui 2.5.0 --always
           haxelib install hscript 2.4.0 --always
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
