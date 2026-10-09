@@ -99,7 +99,11 @@
 	     只有 iOS 需要（PC/Android 走 library / 外部存储）。
 	     注意：CI 生成的 zip 位于 assets/preload/resources.zip，这里 rename 到
 	     assets/resources.zip —— 与 ensureAssets 的第一个候选路径一致。 -->
-	<assets path="assets/preload/resources.zip" rename="assets/resources.zip" if="ios"/>
+	<!-- [AE-iOS] 裸引擎模式：不打包 AE 资源包（resources.zip）。
+	     iOS build 不再要求 assets/preload/resources.zip，PE 核心资源由 lime 直接打包进 App。
+	     AE 菜单/歌曲/视频等由用户从 iPad 外部（mods/）加载。
+	     如需内置完整 AE 资源，取消下一行注释并让 CI 生成该 zip。 -->
+	<!-- <assets path="assets/preload/resources.zip" rename="assets/resources.zip" if="ios"/> -->
 
 	<!-- assets path="CHANGELOG.md" rename='changelog.txt' -->
 
