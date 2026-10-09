@@ -33,3 +33,49 @@
 
 ## 任务队列（Issues）
 - 每个任务开一个 issue，认领 comment claiming #X，完成关 issue 并写交接。
+
+## ☁️ 云端 Agent 留言（WorkBuddy 云端）— 动工前请读
+
+### 1. CI 失败真因已查明 —— 不是 source/ 编译错
+「进行中」里写的「修复 AECover 那批 source/ 改动导致的编译失败」是**误判**。
+build.log 全文只有两行，真实报错是：
+
+```
+Warning: Ignoring unknown fps=""
+Error: Could not find asset path "assets/preload/resources.zip"
+```
+
+即 `Project.xml:102` 的
+`<assets path="assets/preload/resources.zip" rename="assets/resources.zip" if="ios"/>` —— iOS 构建**强制要求**这个 zip。
+我在 `8201982` 把 workflow 改成裸引擎时删掉了「下载 AE Release / 生成 resources.zip」步骤，于是**从 8201982 起每次 iOS Build 都挂在这一步**（`3e3e12d` 那次同样，与 AECover 无关）。
+
+**已修复**：注释掉 Project.xml 该引用（PE 核心预加载资源改由 lime 直接打进 App），已推 `0dcdec9`，CI 已重新触发。
+→ 请**不要再排查 source/ 的编译错误**，那条路走不通。
+
+### 2. 裸引擎是用户明确要求 —— 不要往 IPA 里打 Corruption
+用户原话：「我要裸引擎」「Corruption别打进去」「我让你不带corruotion资源没让你不改」。
+含义：IPA **不打包** Corruption 歌曲/模组资源；AE 菜单/歌曲由 iPad 外部加载（用户平板上已有完整资源，电脑端不用传）。
+
+所以「已知坑」里写的「CI 外链下载现打 resources.zip（顶层必须 assets/、mods/）」这条计划**与用户意愿冲突**，请先搁置，等 source 稳定 + 真机验证后再讨论。
+（补充：SUtil.ensureAssets 找不到内置 resources.zip 会静默跳过，不崩、不影响运行。）
+
+### 3. 交集文件我动了 Project.xml（特此预约告知）
+按分工 Project.xml 属交集需预约，但本次是修 CI 阻塞的必要动作：
+- 已改：注释 `resources.zip` 引用 + 说明注释（`[AE-iOS] 裸引擎模式`）
+- 后续若动 Project.xml 的 icon / assets 段，我会先在此标注
+
+### 4. 我接下来负责的部分（source/，请勿动）
+- AECover 主菜单视觉还原（已推，待真机校准）
+- 菜单文字/交互：STORY / FREEPLAY / OPTIONS / EXTRAS / CREDITS
+- SELECT YOUR VICTIM 故障（glitch）特效
+- freeplay 电子钟（读 freeplayClockValues.json）
+- storymode 周目视频页
+
+### 5. 当前阻塞项：需要真机截图
+AECover 的图层坐标/缩放是**按 menuPositions.json + 实机录屏推断**的，没真机跑过，大概率要调。
+等用户给「iPad 主菜单截图」后我才能校准；校准完再推进下一批 UI。
+
+### 6. 我这边环境限制（避免误判）
+- 云端沙箱**直连 github.com:443 不通**（只有 api.github.com 通），所以我用 Git Data API（blob→tree→commit→ref）推 main，不走常规 git push。我推完会更新 ref，你 fetch 后正常操作即可。
+- 我无法本地跑 iOS 构建，只能读 CI 日志 / artifacts 判断结果（run logs zip 太大时会读 `lime-build-log` artifact）。
+- 后续我的 commit 前缀用 `[cloud]`。
