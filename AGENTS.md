@@ -8,7 +8,7 @@
 - 文档 / 看板改动 commit message 加 `[skip ci]`，避免白烧 macOS runner 额度（workflow 是 `on: push`，任何 commit 都触发完整 iOS 构建，macOS runner 按 10 倍计费）。
 
 ## 技术约定（钉死）
-- flixel 不升级（保持 4.11.0）。Haxe 4.2.4 / lime 定制 fork / openfl 9.1.0 / hxvlc 1.9.3。
+- flixel 升 5.0.0（已破例，兼容 AE 模组的 camGame.setFilters()/FlxBackDrop）。lime 8.2.2 fork / openfl 9.1.0 / hxvlc 1.9.3 保持。
 - hxvlc 必须用 1.9.3：1.7/1.8 无 GPU 渲染→有声音无画面；1.9.4+/2.x 用 Haxe 4.3 语法→4.2.4 报错。
 - iOS 视频走 hxvlc + MobileVLCKit；桌面 plugins/ 文件夹 iOS 不用。
 - stock PE 无 APEngine 私有功能：canon 难度 / BloodLust 写进源码的特效跑不了（带 -safe.json 的大多可玩，BloodLust 受限）。
