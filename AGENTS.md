@@ -7,9 +7,9 @@
 两 agent 无实时聊天，唯一共享空间 = 本仓库（代码 / Issues / PR / 本文件）。
 
 ## 铁律
-- main = 唯一可发布真相。代码改动走 feature 分支 + PR，不直接 push main。
+- main = 唯一可发布真相。改动直接 push main（不走 feature 分支 / PR）。
 - 开工前读本文件 + 最近 commits + issue 列表，确认目标文件无人占用。
-- 交集文件（Project.xml、SUtil.hx）改动前必须在「进行中」标注预约，对方等 PR 合并后再动。
+- 交集文件（Project.xml、SUtil.hx）改动前必须在「进行中」标注预约，对方改完后再动。
 
 ## 文件分工
 - source/（AECover、camVideo 视频层、动态菜单、lua guard 等 AE 移植）→ 云端 Agent
