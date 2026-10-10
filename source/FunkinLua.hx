@@ -2566,7 +2566,7 @@ class FunkinLua {
 			{
 				var save:FlxSave = new FlxSave();
 				// folder goes unused for flixel 5 users. @BeastlyGhost
-				save.bind(name , CoolUtil.getSavePath(folder));
+				save.bind(name #if (flixel < "5.0.0") , CoolUtil.getSavePath(folder) #end);
 				PlayState.instance.modchartSaves.set(name, save);
 				return;
 			}

@@ -338,7 +338,8 @@ class Main extends Sprite
 		//
 		// 结论：initialZoom 归 1，画布比例归 16:9，屏幕适配归 RatioScaleMode。
 		//       三件事各司其职，不重叠、不打架。
-		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, 1.0, game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
+		// flixel 5 移除了 FlxGame 的 zoom 参数；flixel 4 仍需要它
+		var flxGame:FlxGame = new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") 1.0, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen);
 		addChild(flxGame);
 
 		// ==================== [PE-iOS] 屏幕适配：交给 RatioScaleMode ====================
