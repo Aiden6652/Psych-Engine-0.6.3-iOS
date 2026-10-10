@@ -46,7 +46,8 @@ jobs:
       - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
         run: |
           set -Eeuo pipefail
-          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
+          # flixel 5.x 要求 Haxe >= 4.2.5（flixel 官方 CI 用 4.2.5 / 4.3.6 测试）
+          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.5/haxe-4.2.5-osx-installer.pkg -o haxe.pkg
           SZ=$(wc -c < haxe.pkg | tr -d ' ')
           if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
           sudo installer -pkg haxe.pkg -target /
@@ -65,9 +66,10 @@ jobs:
           set -Eeuo pipefail
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
           haxelib install openfl 9.1.0 --always
-          haxelib install flixel 5.0.0 --always
+          # [AE-iOS] 升级 flixel 5（5.x 最高 5.9.0），配套 addons 3.x / ui 2.6.x
+          haxelib install flixel 5.9.0 --always
           haxelib install flixel-addons 3.3.2 --always
-          haxelib install flixel-ui 2.5.0 --always
+          haxelib install flixel-ui 2.6.3 --always
           haxelib install hscript 2.4.0 --always
           haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 

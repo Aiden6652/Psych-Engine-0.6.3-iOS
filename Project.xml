@@ -115,16 +115,16 @@
 	<assets path="assets/fonts" />
 	<!-- _______________________________ Libraries ______________________________ -->
 
-	<haxelib name="flixel" version="5.0.0" />
+	<haxelib name="flixel" />
 	<haxedev set='webgl' />
 
 	<!--In case you want to use the addons package-->
-	<haxelib name="flixel-addons" version="3.3.2" />
+	<haxelib name="flixel-addons" />
 	<haxelib name="hscript" />
 	<define name="hscriptPos" />
 
 	<!--In case you want to use the ui package-->
-	<haxelib name="flixel-ui" version="2.5.0" />
+	<haxelib name="flixel-ui" />
 	<!-- video: use hxvlc (ships iOS static libs). Do NOT use hxCodec: on iOS it links a libvlc.a that was never shipped -->
 	<haxelib name="hxvlc" if="VIDEOS_ALLOWED"/>
 	<haxelib name="linc_luajit" if="LUA_ALLOWED"/>
@@ -185,10 +185,10 @@
 
 	<!--Place custom nodes like icons here (higher priority to override the HaxeFlixel icon)-->
 	
-	<icon path="icon16.png" size='16'/>
-	<icon path="icon32.png" size='32'/>
-	<icon path="icon64.png" size='64'/>
-	<icon path="iconOG.png" />
+	<icon path="art/icon16.png" size='16'/>
+	<icon path="art/icon32.png" size='32'/>
+	<icon path="art/icon64.png" size='64'/>
+	<icon path="art/iconOG.png" />
     
     <!-- Fixes Metal issue on XCode 12 and above (?)-->
     <dependency name="Metal.framework" if="ios" />
