@@ -885,11 +885,15 @@ class FunkinLua {
 			#if hscript
 			initHaxeModule();
 			try {
-				var str:String = '';
-				if(libPackage.length > 0)
-					str = libPackage + '.';
+			var str:String = '';
+			if(libPackage.length > 0)
+				str = libPackage + '.';
 
-				hscript.variables.set(libName, Type.resolveClass(str + libName));
+			var cls = Type.resolveClass(str + libName);
+			// [AE-iOS] AE 用 addHaxeLibrary('X','vlc') 注入 hxCodec 类，但本 fork 兼容层包名是 hxcodec
+			if(cls == null && libPackage == 'vlc')
+				cls = Type.resolveClass('hxcodec.' + libName);
+			hscript.variables.set(libName, cls);
 			}
 			catch (e:Dynamic) {
 				luaTrace(scriptName + ":" + lastCalledFunction + " - " + e, false, false, FlxColor.RED);
@@ -2973,7 +2977,7 @@ class FunkinLua {
 			return true;
 		}
 
-		var foldersToCheck:Array<String> = [Paths.mods('shaders/')];
+		var foldersToCheck:Array<String> = [Paths.mods('shaders/'), 'assets/shaders/'];
 		if(Paths.currentModDirectory != null && Paths.currentModDirectory.length > 0)
 			foldersToCheck.insert(0, Paths.mods(Paths.currentModDirectory + '/shaders/'));
 
@@ -3492,6 +3496,9 @@ class HScript
 		interp.variables.set('FlxRuntimeShader', FlxRuntimeShader);
 		#end
 		interp.variables.set('ShaderFilter', openfl.filters.ShaderFilter);
+		interp.variables.set('FlxTrail', flixel.addons.effects.FlxTrail);
+		interp.variables.set('FlxColor', flixel.util.FlxColor);
+		interp.variables.set('GameOverSubstate', GameOverSubstate);
 		interp.variables.set('StringTools', StringTools);
 
 		interp.variables.set('setVar', function(name:String, value:Dynamic)
