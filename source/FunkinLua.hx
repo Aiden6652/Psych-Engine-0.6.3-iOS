@@ -123,7 +123,7 @@ class FunkinLua {
 
 		// [AE-iOS] AE 缺失 Lua API 安全兜底：避免 mod 调用 nil 函数导致整首歌崩
 		// startsWith/endsWith：AE 给 string 元表加的方法，psychShit.lua 等依赖
-		LuaL.dostring(lua, 'string.startsWith = function(s, p) return string.sub(s, 1, #p) == p end; string.endsWith = function(s, suf) return string.sub(s, #s - #suf + 1) == suf end;');
+		LuaL.dostring(lua, 'local mt = (debug and debug.getmetatable and debug.getmetatable("")) or {}; if not rawget(mt, "__index") then mt.__index = string end; if debug and debug.setmetatable then pcall(debug.setmetatable, "", mt) end; string.startsWith = function(s, p) return string.sub(tostring(s), 1, #p) == p end; string.endsWith = function(s, suf) return string.sub(tostring(s), #tostring(s) - #suf + 1) == suf end;');
 		// 其余 AE 自定义全局函数：未实现则置 no-op，防止 attempt to call a nil value
 		LuaL.dostring(lua, 'local __noop = function(...) return nil end; local __names = {"createRuntimeShader","setFloat","setVar","getVar","ddHaxeLibrary","moveCamera","setproperty","precacheAnimatedImage","createFilledBar","updateBar","FlxTrail","addBehindDad","addBehindBF","Cam","boundTo","remapToRange","show","contains","destroy","forEachAlive","indexOf","kill","push","setOnLuas","GameOverSubstate","getScreenPosition","openSubState","stop","note","Cinematics","LowerBar","RamenDominoes","UpperBar","fixShaderCoordFix","resetCamCache","getLuaObject","MP4Handler","lerp","getControl","makeControl","tweenControl","holdInput","input","keyHoldShit","keyPress","keys","getKeyFromID","updateControllers","goodNoteHitP2","noteMissP2","noteMissPressP2","onKeyPressP2","addOverlay","createForestClone","createTrailFrame","createTrailFrameBF","createTrailFrameDad","altFloor","altWall","changeBG","normalFloor","normalWall","pixelThingie","partSicle","trainReset","trainStart","updateTrainPos","windCamPos","windGFCam","ratingComboStuff","scoreTxtStuff","popUpScore","setControl"}; for _, n in ipairs(__names) do if _G[n] == nil then _G[n] = __noop end end');
 		// dadDance/gfDance：AE 强制 dad/gf 跳舞（真实实现）
@@ -3497,7 +3497,11 @@ class HScript
 		#end
 		interp.variables.set('ShaderFilter', openfl.filters.ShaderFilter);
 		interp.variables.set('FlxTrail', flixel.addons.effects.FlxTrail);
-		interp.variables.set('FlxColor', flixel.util.FlxColor);
+		interp.variables.set('FlxColor', {
+			RED: 0xFFFF0000, GREEN: 0xFF00FF00, BLUE: 0xFF0000FF, WHITE: 0xFFFFFFFF,
+			BLACK: 0xFF000000, YELLOW: 0xFFFFFF00, CYAN: 0xFF00FFFF, MAGENTA: 0xFFFF00FF,
+			GRAY: 0xFF808080, TRANSPARENT: 0x00000000
+		});
 		interp.variables.set('GameOverSubstate', GameOverSubstate);
 		interp.variables.set('StringTools', StringTools);
 
