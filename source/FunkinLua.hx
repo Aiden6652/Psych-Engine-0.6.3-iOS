@@ -126,6 +126,13 @@ class FunkinLua {
 		LuaL.dostring(lua, 'local mt = (debug and debug.getmetatable and debug.getmetatable("")) or {}; if not rawget(mt, "__index") then mt.__index = string end; if debug and debug.setmetatable then pcall(debug.setmetatable, "", mt) end; string.startsWith = function(s, p) return string.sub(tostring(s), 1, #p) == p end; string.endsWith = function(s, suf) return string.sub(tostring(s), #tostring(s) - #suf + 1) == suf end;');
 		// 其余 AE 自定义全局函数：未实现则置 no-op，防止 attempt to call a nil value
 		LuaL.dostring(lua, 'local __noop = function(...) return nil end; local __names = {"createRuntimeShader","setFloat","setVar","getVar","ddHaxeLibrary","moveCamera","setproperty","precacheAnimatedImage","createFilledBar","updateBar","FlxTrail","addBehindDad","addBehindBF","Cam","boundTo","remapToRange","show","contains","destroy","forEachAlive","indexOf","kill","push","setOnLuas","GameOverSubstate","getScreenPosition","openSubState","stop","note","Cinematics","LowerBar","RamenDominoes","UpperBar","fixShaderCoordFix","resetCamCache","getLuaObject","MP4Handler","lerp","getControl","makeControl","tweenControl","holdInput","input","keyHoldShit","keyPress","keys","getKeyFromID","updateControllers","goodNoteHitP2","noteMissP2","noteMissPressP2","onKeyPressP2","addOverlay","createForestClone","createTrailFrame","createTrailFrameBF","createTrailFrameDad","altFloor","altWall","changeBG","normalFloor","normalWall","pixelThingie","partSicle","trainReset","trainStart","updateTrainPos","windCamPos","windGFCam","ratingComboStuff","scoreTxtStuff","popUpScore","setControl"}; for _, n in ipairs(__names) do if _G[n] == nil then _G[n] = __noop end end');
+		// [AE-iOS] 暴露 openfl/flixel 标准类为 lua 全局工厂，避免 AE 裸调用 nil 崩（runHaxeCode 外）
+		Lua_helper.add_callback(lua, "ShaderFilter", function(shader:Dynamic):Dynamic {
+			try { return new openfl.filters.ShaderFilter(shader); } catch (e:Dynamic) { return null; }
+		});
+		Lua_helper.add_callback(lua, "FlxTrail", function(obj:Dynamic, ?color:Int = 0xFFFF0000, ?length:Int = 20, ?strength:Float = 2):Dynamic {
+			try { return new flixel.addons.effects.FlxTrail(obj, color, length, strength); } catch (e:Dynamic) { return null; }
+		});
 		// dadDance/gfDance：AE 强制 dad/gf 跳舞（真实实现）
 		Lua_helper.add_callback(lua, "dadDance", function() {
 			if (PlayState.instance != null && PlayState.instance.dad != null) PlayState.instance.dad.dance();
