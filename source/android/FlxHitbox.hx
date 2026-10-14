@@ -8,6 +8,7 @@ import flixel.tweens.FlxTween;
 import flixel.ui.FlxButton;
 import flixel.util.FlxColor;
 import openfl.display.BitmapData;
+import openfl.geom.Rectangle;
 
 /**
  * [PE-iOS] P-Slice 风格 hitbox —— 4 列「整屏高」触控区（代码绘制，不依赖图集）。
@@ -58,6 +59,13 @@ class FlxHitbox extends FlxSpriteGroup
 	/// 色带常驻透明度
 	static inline var BAR_ALPHA:Float = 0.85;
 
+	/// [PE-iOS] 触控区判定向左右各外扩的比例（相对列宽）。
+	/// 外扩后相邻两列的判定矩形会重叠：手指按在两列交界（中间地带）时，
+	/// 同一个触摸点会同时落在两列的判定区内 -> 两列一起触发（等于同时按下两个键）。
+	/// 外扩部分图形全透明，不影响"整列点亮"的视觉。
+	/// 调大 = 中间地带更宽更容易双触发；调小 = 更不容易误触相邻键。
+	static inline var EDGE_PAD_RATIO:Float = 0.15;
+
 	/// 四个方向的颜色（PE 默认准星色：紫 / 青 / 绿 / 红，与无视频版那四条色带一致）
 	static var LANE_COLORS:Array<FlxColor> = [0xFFC24B99, 0xFF00C8FF, 0xFF12FA05, 0xFFF9393F];
 
@@ -93,12 +101,26 @@ class FlxHitbox extends FlxSpriteGroup
 		barRight = add(createBar(3 * colW, colY, colW, colH, LANE_COLORS[3], false));
 	}
 
-	/// 透明触控区：整块可点，按下时整块点亮
+	/// 透明触控区：整块可点，按下时整块点亮。
+	///
+	/// [PE-iOS] 判定区会向左右各外扩 `w * EDGE_PAD_RATIO`：
+	///   - 外扩部分图形全透明，不影响"整列点亮"的视觉；
+	///   - 外扩后相邻两列的判定矩形重叠，手指按在两列中间时，
+	///     同一个触摸点会同时命中两列 -> 同时按下两个键。
 	function createZone(x:Float, y:Float, w:Float, h:Float, color:FlxColor):FlxButton
 	{
-		var button = new FlxButton(x, y);
+		var pad:Float = w * EDGE_PAD_RATIO;
+		var coreW:Int = Std.int(Math.max(1, w));
+		var coreH:Int = Std.int(Math.max(1, h));
+		var padI:Int = Std.int(Math.max(1, pad));
+
+		// 向左偏移 pad，使中间"有色核心区"精确对齐原来的列位置
+		var button = new FlxButton(x - pad, y);
+
 		var fillColor:Int = 0xFF000000 | (color & 0xFFFFFF);
-		var bmd:BitmapData = new BitmapData(Std.int(Math.max(1, w)), Std.int(Math.max(1, h)), true, fillColor);
+		// 整块先全透明，再只填中间核心区 -> 两侧外扩区只用于扩大判定、不可见
+		var bmd:BitmapData = new BitmapData(coreW + padI * 2, coreH, true, 0x00000000);
+		bmd.fillRect(new Rectangle(padI, 0, coreW, coreH), fillColor);
 		button.loadGraphic(bmd);
 		button.antialiasing = orgAntialiasing;
 		button.alpha = 0;
