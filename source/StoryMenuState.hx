@@ -27,6 +27,42 @@ class StoryMenuState extends MusicBeatState
 
 	var scoreText:FlxText;
 
+	// [AE-iOS] AE 的 week json 把 weekBackground / weekCharacters 全部留空
+	// （AE 用闭源 SoftCodeMenu 自己渲染背景和人物，不走 stock 这两个字段），
+	// 导致 stock StoryMenuState 隐藏背景、不渲染人物，露出原生黄色 bgYellow 占位块。
+	// 这里按周索引兜底，恢复背景图与人物显示。
+	static var AE_BG_FALLBACK:Array<String> = ['stage','halloween','limo','philly','philly','stage','school-pixel','school','tank','stage','stage'];
+	static var AE_CHARS_FALLBACK:Array<Array<String>> = [
+		['dad','bf','gf'],
+		['spooky','bf','gf'],
+		['mom','bf','gf'],
+		['dad','bf','gf'],
+		['pico','bf','gf'],
+		['dad','bf','gf'],
+		['senpai','bf','gf'],
+		['dad','bf','gf'],
+		['tankman','bf','gf'],
+		['dad','bf','gf'],
+		['dad','bf','gf']
+	];
+
+	static function aeBgFallback(idx:Int):String
+	{
+		if (idx < 0) idx = 0;
+		return AE_BG_FALLBACK[idx % AE_BG_FALLBACK.length];
+	}
+
+	static function aeCharsFallback(idx:Int):Array<String>
+	{
+		if (idx < 0) idx = 0;
+		return AE_CHARS_FALLBACK[idx % AE_CHARS_FALLBACK.length];
+	}
+
+	static function aeCharsEmpty(arr:Array<String>):Bool
+	{
+		return (arr == null || arr.length < 3 || (arr[0] == '' && arr[1] == '' && arr[2] == ''));
+	}
+
 	private static var lastDifficultyName:String = '';
 	var curDifficulty:Int = 1;
 
@@ -131,6 +167,8 @@ class StoryMenuState extends MusicBeatState
 
 		WeekData.setDirectoryFromWeek(loadedWeeks[0]);
 		var charArray:Array<String> = loadedWeeks[0].weekCharacters;
+		// [AE-iOS] 周数据人物留空时兜底
+		if (aeCharsEmpty(charArray)) charArray = aeCharsFallback(0);
 		for (char in 0...3)
 		{
 			var weekCharacterThing:MenuCharacter = new MenuCharacter((FlxG.width * 0.25) * (1 + char) - 150, charArray[char]);
@@ -417,11 +455,12 @@ class StoryMenuState extends MusicBeatState
 
 		bgSprite.visible = true;
 		var assetName:String = leWeek.weekBackground;
+		// [AE-iOS] 周数据 weekBackground 留空时，stock 逻辑会隐藏背景露出原生黄块 -> 兜底取 AE 自带背景图
 		if(assetName == null || assetName.length < 1) {
-			bgSprite.visible = false;
-		} else {
-			bgSprite.loadGraphic(Paths.image('menubackgrounds/menu_' + assetName));
+			assetName = aeBgFallback(curWeek);
 		}
+		bgSprite.visible = true;
+		bgSprite.loadGraphic(Paths.image('menubackgrounds/menu_' + assetName));
 		PlayState.storyWeek = curWeek;
 
 		CoolUtil.difficulties = CoolUtil.defaultDifficulties.copy();
@@ -475,6 +514,8 @@ class StoryMenuState extends MusicBeatState
 	function updateText()
 	{
 		var weekArray:Array<String> = loadedWeeks[curWeek].weekCharacters;
+		// [AE-iOS] 周数据人物留空时兜底
+		if (aeCharsEmpty(weekArray)) weekArray = aeCharsFallback(curWeek);
 		for (i in 0...grpWeekCharacters.length) {
 			grpWeekCharacters.members[i].changeCharacter(weekArray[i]);
 		}
