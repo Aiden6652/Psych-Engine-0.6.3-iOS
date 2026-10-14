@@ -133,6 +133,37 @@ class FunkinLua {
 		Lua_helper.add_callback(lua, "FlxTrail", function(obj:Dynamic, ?color:Int = 0xFFFF0000, ?length:Int = 20, ?strength:Float = 2):Dynamic {
 			try { return new flixel.addons.effects.FlxTrail(obj, color, length, strength); } catch (e:Dynamic) { return null; }
 		});
+		// [AE-iOS] 补齐 AE 私有 lua 全局（安全回调，防 nil 崩）
+		Lua_helper.add_callback(lua, "setproperty", function(variable:String, value:Dynamic) {
+			var killMe:Array<String> = variable.split('.');
+			if(killMe.length > 1) {
+				setVarInArray(getPropertyLoopThingWhatever(killMe), killMe[killMe.length-1], value);
+				return true;
+			}
+			setVarInArray(getInstance(), variable, value);
+			return true;
+		});
+		Lua_helper.add_callback(lua, "moveCamera", function(who:String) {
+			// [AE-iOS] stock PE 自动聚焦相机，AE 的 moveCamera 仅强制锁定；此处 no-op 防崩
+		});
+		Lua_helper.add_callback(lua, "ddHaxeLibrary", function(libName:String, ?libPackage:String = '') {
+			#if hscript
+			initHaxeModule();
+			try {
+				var str:String = '';
+				if(libPackage.length > 0) str = libPackage + '.';
+				var cls = Type.resolveClass(str + libName);
+				if(cls == null && libPackage == 'vlc') cls = Type.resolveClass('hxcodec.' + libName);
+				hscript.variables.set(libName, cls);
+			} catch (e:Dynamic) {}
+			#end
+		});
+		Lua_helper.add_callback(lua, "precacheAnimatedImage", function(tag:String) {
+			try { Paths.returnGraphic(tag); } catch (e:Dynamic) {}
+		});
+		Lua_helper.add_callback(lua, "stopMusic", function(?name:String) {
+			try { if (FlxG.sound.music != null) FlxG.sound.music.stop(); } catch (e:Dynamic) {}
+		});
 		// dadDance/gfDance：AE 强制 dad/gf 跳舞（真实实现）
 		Lua_helper.add_callback(lua, "dadDance", function() {
 			if (PlayState.instance != null && PlayState.instance.dad != null) PlayState.instance.dad.dance();
