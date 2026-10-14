@@ -18,6 +18,7 @@ import flixel.FlxSprite;
 import flixel.FlxG;
 import flixel.tweens.FlxEase;
 import flixel.tweens.FlxTween;
+import flixel.tweens.FlxTweenType;
 import flixel.util.FlxTimer;
 import MainMenuState;
 
@@ -84,7 +85,7 @@ class AECover
 				eye.scrollFactor.set();
 				eye.alpha = 0.55;
 				state.insert(2, eye);
-				FlxTween.tween(eye, {alpha: 0.85}, 1.4, {ease: FlxEase.sineInOut, type: FlxTween.PINGPONG});
+				FlxTween.tween(eye, {alpha: 0.85}, 1.4, {ease: FlxEase.sineInOut, type: FlxTweenType.PINGPONG});
 			}
 		}
 		catch (e:Dynamic)
