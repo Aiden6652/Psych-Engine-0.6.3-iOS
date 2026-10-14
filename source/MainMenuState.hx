@@ -241,7 +241,12 @@ class MainMenuState extends MusicBeatState
 								switch (daChoice)
 								{
 									case 'story_mode':
-										MusicBeatState.switchState(new StoryMenuState());
+						// [AE-iOS] 进 story 推镜（相机拉近后再切场景，切换前复位 zoom）
+						FlxTween.tween(FlxG.camera, {zoom: 1.3}, 0.5, {ease: FlxEase.cubeIn, onComplete: function(t:FlxTween)
+						{
+							FlxG.camera.zoom = 1;
+							MusicBeatState.switchState(new StoryMenuState());
+						}});
 									case 'freeplay':
 										MusicBeatState.switchState(new FreeplayState());
 									#if MODS_ALLOWED
