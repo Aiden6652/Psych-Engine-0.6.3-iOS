@@ -64,7 +64,7 @@ class FlxHitbox extends FlxSpriteGroup
 	/// 同一个触摸点会同时落在两列的判定区内 -> 两列一起触发（等于同时按下两个键）。
 	/// 外扩部分图形全透明，不影响"整列点亮"的视觉。
 	/// 调大 = 中间地带更宽更容易双触发；调小 = 更不容易误触相邻键。
-	static inline var EDGE_PAD_RATIO:Float = 0.15;
+	static inline var EDGE_PAD_RATIO:Float = 0.07;
 
 	/// 四个方向的颜色（PE 默认准星色：紫 / 青 / 绿 / 红，与无视频版那四条色带一致）
 	static var LANE_COLORS:Array<FlxColor> = [0xFFC24B99, 0xFF00C8FF, 0xFF12FA05, 0xFFF9393F];
