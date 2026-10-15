@@ -371,6 +371,9 @@ class TitleState extends MusicBeatState
 		// titleText.screenCenter(X);
 		add(titleText);
 
+		// [AE-iOS] AE 动态标题（title0~6 插画轮播 + titleLogo），替代纯黑底
+		addAETitle(bg);
+
 		var logo:FlxSprite = new FlxSprite().loadGraphic(Paths.image('logo'));
 		logo.screenCenter();
 		logo.antialiasing = ClientPrefs.globalAntialiasing;
@@ -412,6 +415,92 @@ class TitleState extends MusicBeatState
 		}
 
 		// credGroup.add(credTextShit);
+	}
+
+	// ==================== [AE-iOS] AE 动态标题 ====================
+	// AE 的标题页是 title0~6 多张插画轮播 + titleLogo 大 logo（PS 侧载素材，
+	// 位于 assets/images/menus/title/）。stock 只画了 titleEnter（"Press Enter to Begin"），
+	// 从不画这些 -> 标题页只剩黑底。这里：用 title0~6 顶替默认黑底并轮播，叠上 titleLogo，
+	// 隐藏 PE 原版 logoBumpin / gfDanceTitle，避免叠加打架。素材缺失时完全跳过，保留原版。
+	function addAETitle(bg:FlxSprite):Void
+	{
+		var frames:Array<String> = [];
+		for (i in 0...7)
+		{
+			var nm:String = 'menus/title/title' + i;
+			try
+			{
+				if (Paths.image(nm) != null)
+					frames.push(nm);
+			}
+			catch (e:Dynamic) {}
+		}
+		if (frames.length == 0)
+			return; // 没侧载 AE 标题素材 -> 保留原版
+
+		try
+		{
+			bg.loadGraphic(Paths.image(frames[0]));
+			aeCoverFull(bg);
+			bg.scrollFactor.set();
+		}
+		catch (e:Dynamic) {}
+
+		// titleLogo（大 logo）居中偏上
+		var logoAe:FlxSprite = null;
+		try
+		{
+			logoAe = new FlxSprite().loadGraphic(Paths.image('menus/title/titleLogo'));
+		}
+		catch (e:Dynamic)
+		{
+			logoAe = null;
+		}
+		if (logoAe != null && logoAe.graphic != null)
+		{
+			logoAe.setGraphicSize(Std.int(FlxG.width * 0.72));
+			logoAe.updateHitbox();
+			logoAe.setPosition((FlxG.width - logoAe.width) / 2, FlxG.height * 0.28);
+			logoAe.scrollFactor.set();
+			logoAe.antialiasing = ClientPrefs.globalAntialiasing;
+			add(logoAe);
+		}
+
+		if (logoBl != null) logoBl.visible = false;
+		if (gfDance != null) gfDance.visible = false;
+
+		// 轮播 title0~6（每 1.1s 一张）
+		if (frames.length > 1)
+		{
+			var idx:Int = 0;
+			new FlxTimer().start(1.1, function(t:FlxTimer)
+			{
+				idx = (idx + 1) % frames.length;
+				try
+				{
+					var g:FlxGraphic = Paths.image(frames[idx]);
+					if (g != null && bg != null)
+					{
+						bg.loadGraphic(g);
+						aeCoverFull(bg);
+					}
+				}
+				catch (e:Dynamic) {}
+			}, 0);
+		}
+	}
+
+	static function aeCoverFull(s:FlxSprite):Void
+	{
+		if (s == null || s.graphic == null)
+			return;
+		var sc:Float = Math.max(FlxG.width / s.width, FlxG.height / s.height);
+		if (sc > 0 && sc == sc)
+		{
+			s.scale.set(sc, sc);
+			s.updateHitbox();
+		}
+		s.setPosition((FlxG.width - s.width) / 2, (FlxG.height - s.height) / 2);
 	}
 
 	function getIntroTextShit():Array<Array<String>>

@@ -42,6 +42,8 @@ class MainMenuState extends MusicBeatState
 	];
 
 	public var magenta:FlxSprite;
+	// [AE-iOS] 暴露默认底给 AECover，便于第一天套把它隐藏掉
+	public var menuBG:FlxSprite;
 	var camFollow:FlxObject;
 	var camFollowPos:FlxObject;
 	var debugKeys:Array<FlxKey>;
@@ -83,6 +85,7 @@ class MainMenuState extends MusicBeatState
 		bg.screenCenter();
 		bg.antialiasing = ClientPrefs.globalAntialiasing;
 		add(bg);
+		menuBG = bg;
 
 		camFollow = new FlxObject(0, 0, 1, 1);
 		camFollowPos = new FlxObject(0, 0, 1, 1);
@@ -104,30 +107,29 @@ class MainMenuState extends MusicBeatState
 		menuItems = new FlxTypedGroup<FlxSprite>();
 		add(menuItems);
 
-		var scale:Float = 1;
-		/*if(optionShit.length > 6) {
-			scale = 6 / optionShit.length;
-		}*/
+		// [AE-iOS] AE 按钮图集每帧 644x124 且带非零 frameX/frameY（width==frameWidth，本无需裁剪）。
+		// stock 的 screenCenter(X) 不认这个帧偏移，导致按钮被横向推出屏幕、逐项纵向错开
+		// （你看到的 "LAY / FR / ARDS / DITS" 半个词溢出就是这个原因）。
+		// 这里：清零帧偏移 + 固定等比缩放 + 居中竖排。
+		var btnScale:Float = 0.48;
+		var btnGap:Float = 64;
+		var topY:Float = (FlxG.height - ((optionShit.length - 1) * btnGap)) / 2;
 
 		for (i in 0...optionShit.length)
 		{
-			var offset:Float = 108 - (Math.max(optionShit.length, 4) - 4) * 80;
-			var menuItem:FlxSprite = new FlxSprite(0, (i * 140)  + offset);
-			menuItem.scale.x = scale;
-			menuItem.scale.y = scale;
+			var menuItem:FlxSprite = new FlxSprite(0, topY + i * btnGap);
 			menuItem.frames = Paths.getSparrowAtlas('mainmenu/menu_' + optionShit[i]);
+			for (f in menuItem.frames.frames) f.offset.set(0, 0);
 			menuItem.animation.addByPrefix('idle', optionShit[i] + " basic", 24);
 			menuItem.animation.addByPrefix('selected', optionShit[i] + " white", 24);
 			menuItem.animation.play('idle');
 			menuItem.ID = i;
+			menuItem.scale.set(btnScale, btnScale);
+			menuItem.updateHitbox();
 			menuItem.screenCenter(X);
 			menuItems.add(menuItem);
-			var scr:Float = (optionShit.length - 4) * 0.135;
-			if(optionShit.length < 6) scr = 0;
-			menuItem.scrollFactor.set(0, scr);
+			menuItem.scrollFactor.set();
 			menuItem.antialiasing = ClientPrefs.globalAntialiasing;
-			//menuItem.setGraphicSize(Std.int(menuItem.width * 0.58));
-			menuItem.updateHitbox();
 		}
 
 		FlxG.camera.follow(camFollowPos, null, 1);
@@ -292,18 +294,20 @@ class MainMenuState extends MusicBeatState
 
 		menuItems.forEach(function(spr:FlxSprite)
 		{
-			spr.animation.play('idle');
+			var sel:Bool = (spr.ID == curSelected);
+			spr.animation.play(sel ? 'selected' : 'idle');
+			var sc:Float = sel ? 0.58 : 0.48; // [AE-iOS] 选中项放大
+			spr.scale.set(sc, sc);
 			spr.updateHitbox();
+			spr.screenCenter(X);
 
-			if (spr.ID == curSelected)
+			if (sel)
 			{
-				spr.animation.play('selected');
 				var add:Float = 0;
 				if(menuItems.length > 4) {
 					add = menuItems.length * 8;
 				}
 				camFollow.setPosition(spr.getGraphicMidpoint().x, spr.getGraphicMidpoint().y - add);
-				spr.centerOffsets();
 			}
 		});
 	}

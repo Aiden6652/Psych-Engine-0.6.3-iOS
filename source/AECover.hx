@@ -1,92 +1,68 @@
 package;
 
 /**
- * [AE-iOS] AE 主菜单视觉还原器
+ * [AE-iOS] AE 主菜单视觉还原器（「第一天」套）
  *
- * 用 AE 真实素材重绘主菜单背景：
- *   - mainmenu0~3.png  （AE 动态封面，4 帧循环切换）
- *   - corruptionLogoPINK.png（AE 粉色 logo）
- *   - eyemenuglow.png  （招牌眼睛辉光，呼吸闪烁）
+ * 依据 AE PC 端实机录屏还原第一天主菜单：
+ *   - menus/mainmenu/layer1~5.png  分层背景：layer1 夜空 → layer2 城市建筑 → layer3/4/5 悬挂锁链
+ *       （layer6 是"腐蚀黑手"层，属第二天以后，第一天不叠）
+ *   - menus/mainmenu/floatingBf.png + .xml  左侧漂浮 Boyfriend 动画
  *
- * 不再依赖闭源的 data/menuData.json（AE 闭源、该文件根本不存在，
- * 旧版 useAE() 因此永远返回 false，整段封面代码从未执行过）。
+ * 关键：AE 这些素材路径都在 images/menus/mainmenu/ 下，经 Paths.image 加载
+ * （iOS 走 SUtil.resolveCI 大小写容错）；任意素材缺失都静默跳过该层，绝不抛异常。
  *
- * 所有素材经 Paths.image 加载（iOS 走 SUtil.resolveCI 大小写容错）；
- * 任意素材缺失都静默跳过该层，绝不抛异常。
+ * 注意：旧的 AECover 用的是 mainmenu0~3 + eyemenuglow（"闪眼睛"腐蚀套），
+ * 且用 insert(0) 插到 PE 的 menuBG 之下被盖住 —— 本版彻底改为第一天分层素材，
+ * 并显式隐藏 PE 默认底（menuBG）。
  */
 import flixel.FlxSprite;
 import flixel.FlxG;
-import flixel.graphics.FlxGraphic;
-import flixel.tweens.FlxEase;
-import flixel.tweens.FlxTween;
-import flixel.util.FlxTimer;
 import MainMenuState;
 
 class AECover
 {
-	// AE 动态封面帧（磁盘精确大小写）
-	static var coverFrames:Array<String> = ['mainmenu0', 'mainmenu1', 'mainmenu2', 'mainmenu3'];
-	static var coverIdx:Int = 0;
-	static var coverSprite:FlxSprite = null;
+	// 第一天背景分层（绘制顺序：先天空、再建筑、最后锁链）
+	static var DAY1_LAYERS:Array<String> = [
+		'menus/mainmenu/layer1',
+		'menus/mainmenu/layer2',
+		'menus/mainmenu/layer3',
+		'menus/mainmenu/layer4',
+		'menus/mainmenu/layer5'
+	];
 
 	/**
-	 * 在 MainMenuState 上叠加 AE 主菜单视觉。
-	 * 背景层用 insert(0/1/2) 塞到菜单按钮之下，避免盖住交互。
+	 * 在 MainMenuState 上叠加 AE 第一天主菜单视觉。
+	 * 背景层按顺序插到最底层，菜单按钮仍在其上（交互不受影响）。
 	 */
 	public static function apply(state:MainMenuState):Void
 	{
 		try
 		{
-			// 关掉 PE 默认品红底，露出 AE 封面
+			// 1) 藏掉 PE 默认底（menuBG 是 AE 的"眼睛/腐蚀"套，第一天不用）与品红占位
+			if (state.menuBG != null)
+				state.menuBG.visible = false;
 			if (state.magenta != null)
 				state.magenta.visible = false;
 
-			// 1) AE 动态封面背景（mainmenu0~3 循环切换，每 3.2s 一帧）
-			var bg:FlxSprite = loadImg(coverFrames[0]);
-			if (bg != null)
+			// 2) 逐层铺第一天背景（越早插入越靠底：layer1 在最下、layer5 在最上）
+			var idx:Int = 0;
+			for (name in DAY1_LAYERS)
 			{
-				fitFull(bg);
-				bg.scrollFactor.set();
-				coverSprite = bg;
-				state.insert(0, bg);
-
-				new FlxTimer().start(3.2, function(t:FlxTimer)
+				var s:FlxSprite = loadImg(name);
+				if (s != null)
 				{
-					coverIdx = (coverIdx + 1) % coverFrames.length;
-					if (coverSprite != null)
-					{
-						var g:FlxGraphic = loadImgSafe(coverFrames[coverIdx]);
-						if (g != null)
-						{
-							coverSprite.loadGraphic(g);
-							fitFull(coverSprite);
-						}
-					}
-				}, 0);
+					coverFull(s);
+					s.scrollFactor.set();
+					s.antialiasing = ClientPrefs.globalAntialiasing;
+					state.insert(idx, s);
+					idx++;
+				}
 			}
 
-			// 2) AE logo（corruptionLogoPINK）居中偏上
-			var logo:FlxSprite = loadImg('corruptionLogoPINK');
-			if (logo != null)
-			{
-				fitWidth(logo, FlxG.width * 0.62);
-				logo.setPosition((FlxG.width - logo.width) / 2, FlxG.height * 0.08);
-				logo.scrollFactor.set();
-				logo.antialiasing = ClientPrefs.globalAntialiasing;
-				state.insert(1, logo);
-			}
-
-			// 3) 眼睛辉光（eyemenuglow）招牌叠加 + 呼吸
-			var eye:FlxSprite = loadImg('eyemenuglow');
-			if (eye != null)
-			{
-				fitWidth(eye, FlxG.width * 0.92);
-				eye.setPosition((FlxG.width - eye.width) / 2, (FlxG.height - eye.height) / 2);
-				eye.scrollFactor.set();
-				eye.alpha = 0.55;
-				state.insert(2, eye);
-				FlxTween.tween(eye, {alpha: 0.85}, 1.4, {ease: FlxEase.sineInOut, type: FlxTween.PINGPONG});
-			}
+			// 3) 左侧漂浮 BF（动画），置于背景之上、按钮之下
+			var bf:FlxSprite = loadFloatingBf();
+			if (bf != null)
+				state.insert(idx, bf);
 		}
 		catch (e:Dynamic)
 		{
@@ -96,18 +72,13 @@ class AECover
 
 	static function loadImg(name:String):FlxSprite
 	{
-		var s:FlxSprite = new FlxSprite();
-		s.loadGraphic(Paths.image(name));
-		if (s.graphic == null)
-			return null;
-		return s;
-	}
-
-	static function loadImgSafe(name:String):FlxGraphic
-	{
 		try
 		{
-			return Paths.image(name);
+			var s:FlxSprite = new FlxSprite();
+			s.loadGraphic(Paths.image(name));
+			if (s.graphic == null)
+				return null;
+			return s;
 		}
 		catch (e:Dynamic)
 		{
@@ -115,26 +86,39 @@ class AECover
 		}
 	}
 
-	/** 等比放大铺满屏幕并居中。 */
-	static function fitFull(spr:FlxSprite):Void
+	static function loadFloatingBf():FlxSprite
 	{
-		var sc:Float = Math.max(FlxG.width / spr.width, FlxG.height / spr.height);
-		if (sc > 0 && sc == sc) // 排除 NaN
+		try
 		{
-			spr.scale.set(sc, sc);
-			spr.updateHitbox();
+			var bf:FlxSprite = new FlxSprite();
+			bf.frames = Paths.getSparrowAtlas('menus/mainmenu/floatingBf');
+			bf.animation.addByPrefix('float', 'BfFloat', 24, true);
+			bf.animation.play('float');
+			bf.setGraphicSize(Std.int(FlxG.width * 0.30));
+			bf.updateHitbox();
+			bf.setPosition(FlxG.width * 0.12, FlxG.height * 0.38);
+			bf.scrollFactor.set();
+			bf.antialiasing = ClientPrefs.globalAntialiasing;
+			return bf;
 		}
-		spr.setPosition((FlxG.width - spr.width) / 2, (FlxG.height - spr.height) / 2);
+		catch (e:Dynamic)
+		{
+			trace('[AE-iOS] floatingBf failed: ' + e);
+			return null;
+		}
 	}
 
-	/** 按目标宽度等比缩放（保持比例）。 */
-	static function fitWidth(spr:FlxSprite, w:Float):Void
+	/** 等比放大铺满屏幕并居中（cover）。 */
+	static function coverFull(s:FlxSprite):Void
 	{
-		var sc:Float = w / spr.width;
-		if (sc > 0 && sc == sc)
+		if (s == null || s.graphic == null)
+			return;
+		var sc:Float = Math.max(FlxG.width / s.width, FlxG.height / s.height);
+		if (sc > 0 && sc == sc) // 排除 NaN
 		{
-			spr.scale.set(sc, sc);
-			spr.updateHitbox();
+			s.scale.set(sc, sc);
+			s.updateHitbox();
 		}
+		s.setPosition((FlxG.width - s.width) / 2, (FlxG.height - s.height) / 2);
 	}
 }
