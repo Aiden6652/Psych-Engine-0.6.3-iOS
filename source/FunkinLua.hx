@@ -345,7 +345,13 @@ class FunkinLua {
 
 			if(leObj != null) {
 				var arr:Array<String> = PlayState.instance.runtimeShaders.get(shader);
-				leObj.shader = new FlxRuntimeShader(arr[0], arr[1]);
+				try {
+					leObj.shader = new FlxRuntimeShader(arr[0], arr[1]);
+				} catch(e:Dynamic) {
+					// [PE-iOS] 自定义着色器在 iOS(Metal) 编译失败会抛原生异常导致硬崩；兜住并报错，跳过该着色器。
+					luaTrace('setSpriteShader: 着色器 "' + shader + '" 在 iOS 编译失败，已跳过：' + Std.string(e), false, false, FlxColor.RED);
+					return false;
+				}
 				return true;
 			}
 			#else

@@ -46,39 +46,52 @@ class VideoSprite extends FlxSpriteGroup {
 		}
 
 		// initialize sprites
-		videoSprite = new FlxVideoSprite();
-		videoSprite.antialiasing = ClientPrefs.globalAntialiasing;
-		// [PE-iOS] 关键修复：视频必须钉在屏幕上。
-		// FlxVideoSprite 默认 scrollFactor = (1,1)（跟随世界坐标），
-		// 而 FlxSpriteGroup 的 scrollFactor 不会传递给子对象，
-		// 所以打歌时相机跟随角色滚动，画面会被卷出屏幕 -> 只剩声音。
-		videoSprite.scrollFactor.set(0, 0);
-		add(videoSprite);
-		if(canSkip) this.canSkip = true;
-
-		// callbacks
-		if(!shouldLoop) videoSprite.bitmap.onEndReached.add(finishVideo);
-
-		videoSprite.bitmap.onFormatSetup.add(function()
+		try
 		{
-			if (videoSprite == null || videoSprite.bitmap == null) return;
-			var bmd = videoSprite.bitmap.bitmapData;
-			// 防御：尺寸异常时不缩放（否则可能算出 NaN -> setGraphicSize(0,0) -> 不可见）
-			if (bmd != null && (bmd.width < 2 || bmd.height < 2))
+			videoSprite = new FlxVideoSprite();
+			videoSprite.antialiasing = ClientPrefs.globalAntialiasing;
+			// [PE-iOS] 关键修复：视频必须钉在屏幕上。
+			// FlxVideoSprite 默认 scrollFactor = (1,1)（跟随世界坐标），
+			// 而 FlxSpriteGroup 的 scrollFactor 不会传递给子对象，
+			// 所以打歌时相机跟随角色滚动，画面会被卷出屏幕 -> 只剩声音。
+			videoSprite.scrollFactor.set(0, 0);
+			add(videoSprite);
+			if(canSkip) this.canSkip = true;
+
+			// callbacks
+			if(!shouldLoop) videoSprite.bitmap.onEndReached.add(finishVideo);
+
+			videoSprite.bitmap.onFormatSetup.add(function()
 			{
+				if (videoSprite == null || videoSprite.bitmap == null) return;
+				var bmd = videoSprite.bitmap.bitmapData;
+				// 防御：尺寸异常时不缩放（否则可能算出 NaN -> setGraphicSize(0,0) -> 不可见）
+				if (bmd != null && (bmd.width < 2 || bmd.height < 2))
+				{
+					videoSprite.updateHitbox();
+					videoSprite.screenCenter();
+					videoSprite.scrollFactor.set(0, 0);
+					return;
+				}
+				videoSprite.setGraphicSize(FlxG.width);
 				videoSprite.updateHitbox();
 				videoSprite.screenCenter();
-				videoSprite.scrollFactor.set(0, 0);
-				return;
-			}
-			videoSprite.setGraphicSize(FlxG.width);
-			videoSprite.updateHitbox();
-			videoSprite.screenCenter();
-			videoSprite.scrollFactor.set(0, 0); // 缩放后再次确保
-		});
+				videoSprite.scrollFactor.set(0, 0); // 缩放后再次确保
+			});
 
-		// start video and adjust resolution to screen size
-		videoSprite.load(Paths.video(videoName));
+			// start video and adjust resolution to screen size
+			videoSprite.load(Paths.video(videoName));
+		}
+		catch(e:Dynamic)
+		{
+			// [PE-iOS] hxvlc 在 iOS 上初始化/解码可能抛原生异常导致硬崩（abort）。
+			// 这里兜住：弹窗报错 + 移除黑场盖 + 触发 finishCallback 让歌曲继续，而不是整个进程炸掉。
+			trace('[PE-iOS] 视频 "' + videoName + '" 初始化失败，已跳过：' + e);
+			SUtil.applicationAlert('视频初始化失败', '视频 "' + videoName + '" 在 iOS 上初始化异常，已自动跳过：\n' + Std.string(e));
+			if (cover != null) { remove(cover); cover.destroy(); cover = null; }
+			if (finishCallback != null) finishCallback();
+			return;
+		}
 	}
 
 	var alreadyDestroyed:Bool = false;
@@ -137,7 +150,7 @@ class VideoSprite extends FlxSpriteGroup {
 			{
 				if(onSkip != null) onSkip();
 				finishCallback = null;
-				videoSprite.bitmap.onEndReached.dispatch();
+				if(videoSprite != null && videoSprite.bitmap != null) videoSprite.bitmap.onEndReached.dispatch();
 				trace('Skipped video');
 				return;
 			}
