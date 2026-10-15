@@ -289,6 +289,18 @@ class Paths
 		}
 		#end
 
+		// [PE-iOS] 同样要检查 Documents（真实资源目录），不能只看 App 包内置，
+		// 否则 Documents 里明明有文件，守卫却判"不存在"而跳过加载。
+		#if sys
+		var sysRoot:String = SUtil.getPath();
+		if (sysRoot != null && sysRoot.length > 0)
+		{
+			var docPath:String = sysRoot + getPath(key, type, library);
+			docPath = docPath.substring(docPath.indexOf(':') + 1, docPath.length); // 去掉 "shared:" 前缀
+			if (SUtil.existsCI(docPath)) return true;
+		}
+		#end
+
 		if(OpenFlAssets.exists(getPath(key, type))) {
 			return true;
 		}
