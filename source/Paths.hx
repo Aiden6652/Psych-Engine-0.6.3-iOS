@@ -353,6 +353,38 @@ class Paths
 
 		var path = getPath('images/$key.png', IMAGE, library);
 		//trace(path);
+
+		// [PE-iOS] 与 returnSound 对齐：iOS 上真实资源在 Documents 下，
+		// OpenFlAssets 只能读 App 包内置的裸引擎图（stock），AE 的图全在 Documents。
+		// 这里先按 Documents 路径用文件系统读图；读不到再回退到 App 包内置资源。
+		#if sys
+		var sysRoot:String = SUtil.getPath();
+		if (sysRoot != null && sysRoot.length > 0)
+		{
+			var docPath:String = sysRoot + path;
+			docPath = docPath.substring(docPath.indexOf(':') + 1, docPath.length); // 去掉 "shared:" 这类 library 前缀
+			docPath = SUtil.resolveCI(docPath);
+			if (FileSystem.exists(docPath))
+			{
+				if(!currentTrackedAssets.exists(docPath))
+				{
+					var newBitmap:BitmapData = BitmapData.fromFile(docPath);
+					if (newBitmap != null)
+					{
+						var newGraphic:FlxGraphic = FlxGraphic.fromBitmapData(newBitmap, false, docPath);
+						newGraphic.persist = true;
+						currentTrackedAssets.set(docPath, newGraphic);
+					}
+				}
+				if (currentTrackedAssets.exists(docPath))
+				{
+					localTrackedAssets.push(docPath);
+					return currentTrackedAssets.get(docPath);
+				}
+			}
+		}
+		#end
+
 		if (OpenFlAssets.exists(path, IMAGE)) {
 			if(!currentTrackedAssets.exists(path)) {
 				var newGraphic:FlxGraphic = FlxG.bitmap.add(path, false, path);
