@@ -146,7 +146,7 @@ class StoryMenuState extends MusicBeatState
 				weekThing.targetY = num;
 				grpWeekText.add(weekThing);
 
-				weekThing.screenCenter(X);
+				weekThing.x = FlxG.width * 0.03; // [AE-iOS] 周名列表左对齐（PC 布局）
 				weekThing.antialiasing = ClientPrefs.globalAntialiasing;
 				// weekThing.updateHitbox();
 
@@ -207,12 +207,15 @@ class StoryMenuState extends MusicBeatState
 		difficultySelectors.add(rightArrow);
 
 		add(bgYellow);
+		bgYellow.visible = false; // [AE-iOS] 隐藏 stock 黄底，露出 AE 城市背景
 		add(bgSprite);
 		add(grpWeekCharacters);
+		grpWeekCharacters.visible = false; // [AE-iOS] AE story 页不显示周人物
 
 		var tracksSprite:FlxSprite = new FlxSprite(FlxG.width * 0.07, bgSprite.y + 425).loadGraphic(Paths.image('Menu_Tracks'));
 		tracksSprite.antialiasing = ClientPrefs.globalAntialiasing;
 		add(tracksSprite);
+		tracksSprite.visible = false; // [AE-iOS] 不需要 stock 的 "SONGS" 标题图
 
 		txtTracklist = new FlxText(FlxG.width * 0.05, tracksSprite.y + 60, 0, "", 32);
 		txtTracklist.alignment = CENTER;
@@ -222,7 +225,12 @@ class StoryMenuState extends MusicBeatState
 		add(txtTracklist);
 		// add(rankText);
 		add(scoreText);
+		scoreText.visible = false; // [AE-iOS] AE story 页不显示 WEEK SCORE
 		add(txtWeekTitle);
+		txtWeekTitle.visible = false;
+
+		// [AE-iOS] 铺第一天城市背景（与主菜单同一套分层素材）
+		AECover.insertBgInto(this);
 
 		changeWeek();
 		changeDifficulty();
