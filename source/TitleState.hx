@@ -371,8 +371,12 @@ class TitleState extends MusicBeatState
 		// titleText.screenCenter(X);
 		add(titleText);
 
-		// [AE-iOS] AE 动态标题（title0~6 插画轮播 + titleLogo），替代纯黑底
-		addAETitle(bg);
+		// [AE-iOS] 封面：优先按录屏还原（粉 logo 居左 + 右侧角色拼贴 + 版本字 + 随机闪光），
+		// 素材缺失时回落到 AE 分层立绘封面，再不行保留 stock。
+		if (!addRecCover())
+			addAETitle(bg);
+		else
+			bg.visible = false;
 
 		var logo:FlxSprite = new FlxSprite().loadGraphic(Paths.image('logo'));
 		logo.screenCenter();
@@ -415,6 +419,100 @@ class TitleState extends MusicBeatState
 		}
 
 		// credGroup.add(credTextShit);
+	}
+
+	// ==================== [AE-iOS] 录屏封面还原 ====================
+	// 录屏（40s）里的封面页：纯黑底 + 左侧 corruptionLogoPINK 粉 logo +
+	// 右侧 menuArtBySarasacuni 角色拼贴（缓慢上下浮动）+ 左下角版本小字 +
+	// 随机位置的白光闪烁。素材缺失返回 false，由调用方回落到 AE 分层立绘封面。
+	var recArtSpr:FlxSprite = null;
+	var recFlashSpr:FlxSprite = null;
+
+	function addRecCover():Bool
+	{
+		var logoGfx:FlxGraphic = null;
+		var artGfx:FlxGraphic = null;
+		try { logoGfx = Paths.image('corruptionLogoPINK'); } catch (e:Dynamic) {}
+		try { artGfx = Paths.image('menuArtBySarasacuni'); } catch (e:Dynamic) {}
+		if (logoGfx == null || artGfx == null) return false;
+
+		// logo 居左（垂直中心略偏上）
+		try
+		{
+			var logo:FlxSprite = new FlxSprite().loadGraphic(logoGfx);
+			var lw:Float = FlxG.width * 0.36;
+			var sc:Float = lw / logo.width;
+			if (!(sc > 0) || sc != sc) sc = 1;
+			logo.scale.set(sc, sc);
+			logo.updateHitbox();
+			logo.setPosition(FlxG.width * 0.035, FlxG.height * 0.34);
+			logo.scrollFactor.set();
+			logo.antialiasing = ClientPrefs.globalAntialiasing;
+			add(logo);
+		}
+		catch (e:Dynamic) {}
+
+		// 右侧角色拼贴：contain 进 (0.31W x 0.68H) 的框，然后缓慢上下浮动
+		try
+		{
+			var art:FlxSprite = new FlxSprite().loadGraphic(artGfx);
+			var boxW:Float = FlxG.width * 0.31;
+			var boxH:Float = FlxG.height * 0.68;
+			var sc:Float = Math.min(boxW / art.width, boxH / art.height);
+			if (!(sc > 0) || sc != sc) sc = 1;
+			art.scale.set(sc, sc);
+			art.updateHitbox();
+			art.setPosition(FlxG.width * 0.47, FlxG.height * 0.10);
+			art.scrollFactor.set();
+			art.antialiasing = ClientPrefs.globalAntialiasing;
+			add(art);
+			recArtSpr = art;
+			FlxTween.tween(art, {y: art.y + FlxG.height * 0.02}, 3.2, {ease: FlxEase.quadInOut, type: FlxTween.PINGPONG});
+		}
+		catch (e:Dynamic) {}
+
+		// 左下角版本小字
+		try
+		{
+			var ver:FlxText = new FlxText(FlxG.width * 0.035, FlxG.height * 0.90, 0, "APlayer's Engine V1.0 BETA", Std.int(FlxG.height * 0.026));
+			ver.setFormat(Paths.font("vcr.ttf"), Std.int(FlxG.height * 0.026), FlxColor.WHITE, LEFT);
+			ver.antialiasing = ClientPrefs.globalAntialiasing;
+			ver.scrollFactor.set();
+			add(ver);
+		}
+		catch (e:Dynamic) {}
+
+		// 随机白光闪烁
+		recFlashSpr = new FlxSprite().makeGraphic(Std.int(FlxG.width * 0.4), Std.int(FlxG.height * 0.4), FlxColor.WHITE);
+		recFlashSpr.alpha = 0;
+		recFlashSpr.scrollFactor.set();
+		add(recFlashSpr);
+		new FlxTimer().start(FlxG.random.float(1.0, 3.0), function(_:FlxTimer) coverFlash());
+
+		// 隐藏 PE 原版标题素材
+		if (logoBl != null) logoBl.visible = false;
+		if (gfDance != null) gfDance.visible = false;
+		// "Press Enter to Begin" 提到最上层
+		if (titleText != null)
+		{
+			remove(titleText);
+			add(titleText);
+		}
+		trace('[AE-iOS] 录屏封面已布置');
+		return true;
+	}
+
+	function coverFlash():Void
+	{
+		if (recFlashSpr == null) return;
+		recFlashSpr.setPosition(
+			FlxG.random.float(0, FlxG.width - recFlashSpr.width),
+			FlxG.random.float(0, FlxG.height - recFlashSpr.height));
+		recFlashSpr.alpha = 0.32;
+		FlxTween.tween(recFlashSpr, {alpha: 0}, 0.14, {onComplete: function(_:FlxTween)
+		{
+			new FlxTimer().start(FlxG.random.float(1.5, 4.5), function(_:FlxTimer) coverFlash());
+		}});
 	}
 
 	// ==================== [AE-iOS] AE 动态标题 ====================

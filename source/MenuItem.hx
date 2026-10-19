@@ -2,6 +2,7 @@ package;
 
 import flixel.FlxG;
 import flixel.FlxSprite;
+import flixel.graphics.FlxGraphic;
 import flixel.graphics.frames.FlxAtlasFrames;
 import flixel.math.FlxMath;
 import flixel.util.FlxColor;
@@ -11,11 +12,17 @@ class MenuItem extends FlxSprite
 	public var targetY:Float = 0;
 	public var flashingInt:Int = 0;
 
+	/// [AE-iOS] 列表行距与基准 Y（默认 stock 值；story 页按录屏布局覆写）
+	public static var itemSpacing:Float = 120;
+	public static var itemBaseY:Float = 480;
+
 	public function new(x:Float, y:Float, weekName:String = '')
 	{
 		super(x, y);
-		loadGraphic(Paths.image('storymenu/' + weekName));
-		//trace('Test added: ' + WeekData.getWeekNumber(weekNum) + ' (' + weekNum + ')');
+		// [AE-iOS] 周名图缺失（如 story9 / story9z）时回落到 storymenu/null.png
+		var g:FlxGraphic = Paths.image('storymenu/' + weekName);
+		if (g == null) g = Paths.image('storymenu/null');
+		if (g != null) loadGraphic(g);
 		antialiasing = ClientPrefs.globalAntialiasing;
 	}
 
@@ -35,7 +42,7 @@ class MenuItem extends FlxSprite
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
-		y = FlxMath.lerp(y, (targetY * 120) + 480, CoolUtil.boundTo(elapsed * 10.2, 0, 1));
+		y = FlxMath.lerp(y, (targetY * itemSpacing) + itemBaseY, CoolUtil.boundTo(elapsed * 10.2, 0, 1));
 
 		if (isFlashing)
 			flashingInt += 1;

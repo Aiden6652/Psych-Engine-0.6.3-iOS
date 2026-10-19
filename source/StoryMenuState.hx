@@ -85,6 +85,7 @@ class StoryMenuState extends MusicBeatState
 	var sprDifficulty:FlxSprite;
 	var leftArrow:FlxSprite;
 	var rightArrow:FlxSprite;
+	var blackBarThingie:FlxSprite;
 
 	var loadedWeeks:Array<WeekData> = [];
 
@@ -108,6 +109,10 @@ class StoryMenuState extends MusicBeatState
 		if(curWeek >= WeekData.weeksList.length) curWeek = 0;
 		persistentUpdate = persistentDraw = true;
 
+		// [AE-iOS] story 页周名列表布局（对齐录屏：行距约 63px、首项基准 127px，1280x720 基准）
+		MenuItem.itemSpacing = FlxG.height * 0.0875;
+		MenuItem.itemBaseY = FlxG.height * 0.176;
+
 		scoreText = new FlxText(10, 10, 0, "SCORE: 49324858", 36);
 		scoreText.antialiasing = ClientPrefs.globalAntialiasing;
 		scoreText.setFormat("VCR OSD Mono", 32);
@@ -115,7 +120,7 @@ class StoryMenuState extends MusicBeatState
 		txtWeekTitle = new FlxText(FlxG.width * 0.7, 10, 0, "", 32);
 		txtWeekTitle.setFormat("VCR OSD Mono", 32, FlxColor.WHITE, RIGHT);
 		txtWeekTitle.antialiasing = ClientPrefs.globalAntialiasing;
-		txtWeekTitle.alpha = 0.7;
+		txtWeekTitle.alpha = 1; // [AE-iOS] 录屏里右上周名是全亮白字
 
 		var rankText:FlxText = new FlxText(0, 10);
 		rankText.text = 'RANK: GREAT';
@@ -132,7 +137,7 @@ class StoryMenuState extends MusicBeatState
 		grpWeekText = new FlxTypedGroup<MenuItem>();
 		add(grpWeekText);
 
-		var blackBarThingie:FlxSprite = new FlxSprite().makeGraphic(FlxG.width, 56, FlxColor.BLACK);
+		blackBarThingie = new FlxSprite().makeGraphic(FlxG.width, 56, FlxColor.BLACK);
 		add(blackBarThingie);
 
 		grpWeekCharacters = new FlxTypedGroup<MenuCharacter>();
@@ -160,6 +165,8 @@ class StoryMenuState extends MusicBeatState
 				grpWeekText.add(weekThing);
 
 				weekThing.x = FlxG.width * 0.03; // [AE-iOS] 周名列表左对齐（PC 布局）
+				weekThing.scale.set(0.85, 0.85); // [AE-iOS] 对齐录屏列表项大小
+				weekThing.updateHitbox();
 				weekThing.antialiasing = ClientPrefs.globalAntialiasing;
 				// weekThing.updateHitbox();
 
@@ -192,11 +199,9 @@ class StoryMenuState extends MusicBeatState
 		difficultySelectors = new FlxGroup();
 		add(difficultySelectors);
 
-		leftArrow = new FlxSprite(grpWeekText.members[0].x + grpWeekText.members[0].width + 10, grpWeekText.members[0].y + 10);
-		leftArrow.frames = ui_tex;
-		leftArrow.animation.addByPrefix('idle', "arrow left");
-		leftArrow.animation.addByPrefix('press', "arrow push left");
-		leftArrow.animation.play('idle');
+		// [AE-iOS] 难度左右箭头换成 mod 自带的红色箭头图
+		leftArrow = new FlxSprite();
+		leftArrow.loadGraphic(Paths.image('selectionArrowLEFT'));
 		leftArrow.antialiasing = ClientPrefs.globalAntialiasing;
 		difficultySelectors.add(leftArrow);
 
@@ -211,19 +216,17 @@ class StoryMenuState extends MusicBeatState
 		sprDifficulty.antialiasing = ClientPrefs.globalAntialiasing;
 		difficultySelectors.add(sprDifficulty);
 
-		rightArrow = new FlxSprite(leftArrow.x + 376, leftArrow.y);
-		rightArrow.frames = ui_tex;
-		rightArrow.animation.addByPrefix('idle', 'arrow right');
-		rightArrow.animation.addByPrefix('press', "arrow push right", 24, false);
-		rightArrow.animation.play('idle');
+		rightArrow = new FlxSprite();
+		rightArrow.loadGraphic(Paths.image('selectionArrowRIGHT'));
 		rightArrow.antialiasing = ClientPrefs.globalAntialiasing;
 		difficultySelectors.add(rightArrow);
 
 		add(bgYellow);
-		bgYellow.visible = false; // [AE-iOS] 隐藏 stock 黄底，露出 AE 城市背景
+		bgYellow.visible = false; // [AE-iOS] 隐藏 stock 黄底，story 页用 bgback 城市背景
 		add(bgSprite);
 		add(grpWeekCharacters);
-		grpWeekCharacters.visible = false; // [AE-iOS] AE story 页不显示周人物
+		grpWeekCharacters.visible = false; // [AE-iOS] story 页不显示周人物
+		blackBarThingie.visible = false; // [AE-iOS] 顶部黑条由 chains 链条层替代
 
 		var tracksSprite:FlxSprite = new FlxSprite(FlxG.width * 0.07, bgSprite.y + 425).loadGraphic(Paths.image('Menu_Tracks'));
 		tracksSprite.antialiasing = ClientPrefs.globalAntialiasing;
@@ -238,16 +241,15 @@ class StoryMenuState extends MusicBeatState
 		add(txtTracklist);
 		// add(rankText);
 		add(scoreText);
-		scoreText.visible = false; // [AE-iOS] AE story 页不显示 WEEK SCORE
 		add(txtWeekTitle);
-		txtWeekTitle.visible = false;
 
-		// [AE-iOS] 铺第一天城市背景（与主菜单同一套分层素材），作为视频缺失时的兜底
-		bgInsertIndex = AECover.insertBgInto(this);
+		// [AE-iOS] story 页背景：bgback 城市夜景 + 顶部链条（mod 自带素材）
+		insertAeBackground();
 
 		changeWeek();
 		changeDifficulty();
 		showVictimTitle();
+		initClock();
 
         #if mobile
         addVirtualPad(FULL, A_B_X_Y);
@@ -345,6 +347,14 @@ class StoryMenuState extends MusicBeatState
 
 		super.update(elapsed);
 
+		// 时钟每 0.5s 才取一次系统时间，避免每帧 new Date 的 GC 压力
+		clockTimer += elapsed;
+		if (clockTimer >= 0.5)
+		{
+			clockTimer = 0;
+			updateClock();
+		}
+
 		grpLocks.forEach(function(lock:FlxSprite)
 		{
 			lock.y = grpWeekText.members[lock.ID].y;
@@ -388,6 +398,11 @@ class StoryMenuState extends MusicBeatState
 			PlayState.isStoryMode = true;
 			selectedWeek = true;
 
+			// [AE-iOS] 选中周后进入「预览」态：周名列表滑到屏幕下半，上方让位给
+			// MenuVideo<周> 预览窗（对齐录屏里选中周后的画面）。
+			MenuItem.itemBaseY = FlxG.height * 0.60;
+			if (weekVideo != null) weekVideo.visible = true;
+
 			var diffic = CoolUtil.getDifficultyFilePath(curDifficulty);
 			if(diffic == null) diffic = '';
 
@@ -396,7 +411,7 @@ class StoryMenuState extends MusicBeatState
 			PlayState.SONG = Song.loadFromJson(PlayState.storyPlaylist[0].toLowerCase() + diffic, PlayState.storyPlaylist[0].toLowerCase());
 			PlayState.campaignScore = 0;
 			PlayState.campaignMisses = 0;
-			new FlxTimer().start(1, function(tmr:FlxTimer)
+			new FlxTimer().start(1.2, function(tmr:FlxTimer)
 			{
 				LoadingState.loadAndSwitchState(new PlayState(), true);
 				FreeplayState.destroyFreeplayVocals();
@@ -419,23 +434,33 @@ class StoryMenuState extends MusicBeatState
 		WeekData.setDirectoryFromWeek(loadedWeeks[curWeek]);
 
 		var diff:String = CoolUtil.difficulties[curDifficulty];
-		var newImage:FlxGraphic = Paths.image('menudifficulties/' + Paths.formatToSongPath(diff));
-		//trace(Paths.currentModDirectory + ', menudifficulties/' + Paths.formatToSongPath(diff));
+		// [AE-iOS] 难度标签改用 mod 自带图：CANON / SAFE / -Playable-
+		var diffKey:String = Paths.formatToSongPath(diff);
+		var imgName:String = 'safeInfo';
+		if (diffKey.indexOf('canon') >= 0) imgName = 'canonInfo';
+		else if (diffKey.indexOf('play') >= 0) imgName = 'playable';
+		var newImage:FlxGraphic = Paths.image(imgName);
 
 		if(sprDifficulty.graphic != newImage)
 		{
 			sprDifficulty.loadGraphic(newImage);
-			sprDifficulty.x = leftArrow.x + 60;
-			sprDifficulty.x += (308 - sprDifficulty.width) / 3;
 			sprDifficulty.alpha = 0;
-			sprDifficulty.y = leftArrow.y - 15;
 
 			if(tweenDifficulty != null) tweenDifficulty.cancel();
-			tweenDifficulty = FlxTween.tween(sprDifficulty, {y: leftArrow.y + 15, alpha: 1}, 0.07, {onComplete: function(twn:FlxTween)
+			tweenDifficulty = FlxTween.tween(sprDifficulty, {alpha: 1}, 0.07, {onComplete: function(twn:FlxTween)
 			{
 				tweenDifficulty = null;
 			}});
 		}
+
+		// [AE-iOS] 标签水平居中、红色箭头分列两侧（对齐录屏布局）
+		sprDifficulty.screenCenter(X);
+		sprDifficulty.y = FlxG.height * 0.46;
+		leftArrow.x = sprDifficulty.x - leftArrow.width - 20;
+		leftArrow.y = sprDifficulty.y + (sprDifficulty.height - leftArrow.height) / 2;
+		rightArrow.x = sprDifficulty.x + sprDifficulty.width + 20;
+		rightArrow.y = leftArrow.y;
+
 		lastDifficultyName = diff;
 
 		#if !switch
@@ -568,6 +593,53 @@ class StoryMenuState extends MusicBeatState
 
 	// ───────────────────────── [AE-iOS] story 页动态背景 ─────────────────────────
 
+	/**
+	 * story 页背景层：bgback 城市夜景 + 顶部链条（mod 素材，1920x1080 等比铺满）。
+	 * 素材缺失时回落到主菜单那套城市分层背景，保证不黑屏。
+	 */
+	function insertAeBackground():Void
+	{
+		var layers:Array<FlxSprite> = [];
+		try { layers.push(coverSprite('bgback')); } catch (e:Dynamic) {}
+		try { layers.push(coverSprite('chains')); } catch (e:Dynamic) {}
+
+		var idx:Int = 0;
+		for (l in layers)
+		{
+			if (l == null) continue;
+			l.antialiasing = ClientPrefs.globalAntialiasing;
+			insert(idx, l);
+			idx++;
+		}
+
+		if (idx > 0)
+		{
+			bgInsertIndex = idx;
+		}
+		else
+		{
+			// 兜底：主菜单同款分层城市背景
+			bgInsertIndex = AECover.insertBgInto(this);
+		}
+		trace('[AE-iOS] story 背景层数 = ' + bgInsertIndex);
+	}
+
+	/// 等比铺满屏幕（cover）并居中
+	function coverSprite(key:String):FlxSprite
+	{
+		var s:FlxSprite = new FlxSprite();
+		s.loadGraphic(Paths.image(key));
+		if (s.graphic == null) return null;
+
+		var sc:Float = Math.max(FlxG.width / s.width, FlxG.height / s.height);
+		if (!(sc > 0) || sc != sc) sc = 1;
+		s.scale.set(sc, sc);
+		s.updateHitbox();
+		s.screenCenter();
+		s.scrollFactor.set();
+		return s;
+	}
+
 	inline function weekVideoPath(idx:Int):String
 	{
 		return Paths.video('story/MenuVideo' + idx);
@@ -624,6 +696,8 @@ class StoryMenuState extends MusicBeatState
 			weekVideo.autoVolumeHandle = false;
 			try { weekVideo.bitmap.volume = 0; } catch (e:Dynamic) {}
 			try { weekVideo.play(); } catch (e:Dynamic) {}
+			// 预览窗只在选中周后露出（浏览态保持 bgback 静态背景，对齐录屏）
+			weekVideo.visible = selectedWeek;
 		});
 		#end
 	}
@@ -678,15 +752,22 @@ class StoryMenuState extends MusicBeatState
 				viewH = FlxG.height;
 			}
 
+			// 预览窗几何（对齐录屏：选中周后 gameplay 预览约占屏幕 66% 宽、47% 高，
+			// 水平居中、自顶部 9% 起）。背景仍是 bgback 静态图，视频只是预览窗。
+			var winX:Float = viewW * 0.17;
+			var winY:Float = viewH * 0.09;
+			var winW:Float = viewW * 0.66;
+			var winH:Float = viewH * 0.47;
+
 			// 不能用 setGraphicSize()：它除以当前 frameWidth，而我们和 hxvlc 的
 			// onFormatSetup 回调挂在同一个事件上，顺序不保证，会算出灾难性的放大倍数。
-			var sc:Float = Math.max(viewW / bmd.width, viewH / bmd.height);
+			var sc:Float = Math.max(winW / bmd.width, winH / bmd.height);
 			if (!(sc > 0) || sc != sc) sc = 1;
 
 			vs.scale.set(sc, sc);
 			vs.updateHitbox();
-			vs.x = (viewW - vs.width) / 2;
-			vs.y = (viewH - vs.height) / 2;
+			vs.x = winX + (winW - vs.width) / 2;
+			vs.y = winY + (winH - vs.height) / 2;
 			vs.scrollFactor.set(0, 0);
 
 			// 只走 FlxSprite 这条路：内层原生 Bitmap 不受相机/scale 管辖，
@@ -740,6 +821,96 @@ class StoryMenuState extends MusicBeatState
 		catch (e:Dynamic)
 		{
 			victimSpr = null;
+		}
+	}
+
+	/// [AE-iOS] 右下角数字时钟：num0-9.png 拼接 + 日期小字（录屏里时钟随时间跳动）
+	var clockDigits:Array<FlxSprite> = [];
+	var clockColons:Array<FlxSprite> = [];
+	var clockDateTxt:FlxText = null;
+	var clockKey:String = '';
+	var clockTimer:Float = 0;
+
+	function initClock():Void
+	{
+		clockDigits = [];
+		clockColons = [];
+		var dot:Int = Std.int(FlxG.height * 0.012);
+		for (i in 0...4)
+		{
+			var d:FlxSprite = new FlxSprite();
+			d.antialiasing = false;
+			add(d);
+			clockDigits.push(d);
+
+			if (i == 1)
+			{
+				for (k in 0...2)
+				{
+					var c:FlxSprite = new FlxSprite().makeGraphic(dot, dot, FlxColor.WHITE);
+					c.antialiasing = false;
+					add(c);
+					clockColons.push(c);
+				}
+			}
+		}
+
+		clockDateTxt = new FlxText(0, 0, 0, '', Std.int(FlxG.height * 0.038));
+		clockDateTxt.setFormat(Paths.font("vcr.ttf"), Std.int(FlxG.height * 0.038), FlxColor.WHITE, RIGHT);
+		clockDateTxt.antialiasing = ClientPrefs.globalAntialiasing;
+		add(clockDateTxt);
+		updateClock();
+	}
+
+	function updateClock():Void
+	{
+		var now:Date = Date.now();
+		var hh:String = StringTools.lpad(Std.string(now.getHours()), '0', 2);
+		var mm:String = StringTools.lpad(Std.string(now.getMinutes()), '0', 2);
+		var key:String = hh + ':' + mm;
+		if (key == clockKey) return;
+		clockKey = key;
+
+		// 数字图约 94~111 x 119，按高度统一缩放，固定步进排列
+		var digitH:Float = FlxG.height * 0.185;
+		var sc:Float = digitH / 119.0;
+		if (!(sc > 0) || sc != sc) sc = 1;
+		var step:Float = digitH * 0.8 + 2;
+		var digits:Array<String> = [hh.charAt(0), hh.charAt(1), mm.charAt(0), mm.charAt(1)];
+
+		var x:Float = FlxG.width * 0.78 - step * 4;
+		var y:Float = FlxG.height * 0.54 - digitH * 0.5;
+
+		for (i in 0...4)
+		{
+			var d:FlxSprite = clockDigits[i];
+			d.loadGraphic(Paths.image('num' + digits[i]));
+			if (d.graphic == null) continue;
+			d.scale.set(sc, sc);
+			d.updateHitbox();
+			d.scrollFactor.set();
+			d.x = x + i * step;
+			d.y = y;
+		}
+
+		// 冒号两枚白点，夹在第 2、3 位数字之间
+		var cx:Float = x + 2 * step;
+		var gap:Float = FlxG.height * 0.012;
+		var cy:Float = y + digitH * 0.5;
+		clockColons[0].x = cx - gap * 1.5;
+		clockColons[0].y = cy - gap * 2.2;
+		clockColons[1].x = cx - gap * 1.5;
+		clockColons[1].y = cy + gap * 1.2;
+		for (c in clockColons) c.scrollFactor.set();
+
+		// 日期小字（对齐录屏里的 "30 JAN"）
+		var months:Array<String> = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+		if (clockDateTxt != null)
+		{
+			clockDateTxt.text = now.getDate() + ' ' + months[now.getMonth()];
+			clockDateTxt.x = FlxG.width * 0.94 - clockDateTxt.width;
+			clockDateTxt.y = y - clockDateTxt.height - 4;
+			clockDateTxt.scrollFactor.set();
 		}
 	}
 
