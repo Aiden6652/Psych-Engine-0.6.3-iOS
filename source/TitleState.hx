@@ -14,6 +14,7 @@ import flixel.addons.transition.TransitionData;
 import haxe.Json;
 import openfl.display.Bitmap;
 import openfl.display.BitmapData;
+import openfl.geom.Matrix;
 #if MODS_ALLOWED
 import sys.FileSystem;
 import sys.io.File;
@@ -434,7 +435,19 @@ class TitleState extends MusicBeatState
 		var artGfx:FlxGraphic = null;
 		try { logoGfx = Paths.image('corruptionLogoPINK'); } catch (e:Dynamic) {}
 		try { artGfx = Paths.image('menuArtBySarasacuni'); } catch (e:Dynamic) {}
+		var diag:String = 'time=' + Date.now().toString() + '\n'
+			+ 'view=' + FlxG.width + 'x' + FlxG.height + '\n'
+			+ 'logoGfx=' + (logoGfx != null) + '\n'
+			+ 'artGfx=' + (artGfx != null) + '\n';
+		#if MODS_ALLOWED
+		try { File.saveContent(SUtil.getPath() + 'pe_ios_cover.txt', diag); } catch (e:Dynamic) {}
+		#end
 		if (logoGfx == null || artGfx == null) return false;
+
+		// iOS 纹理有尺寸/内存上限：封面拼贴原图 3006x3439（约 41MB），
+		// 超限时先降采样再加载，避免加载失败或直接崩。
+		try { logoGfx = limitGraphic(logoGfx, 2048); } catch (e:Dynamic) {}
+		try { artGfx = limitGraphic(artGfx, 2048); } catch (e:Dynamic) {}
 
 		// logo 居左（垂直中心略偏上）
 		try
@@ -513,6 +526,33 @@ class TitleState extends MusicBeatState
 		{
 			new FlxTimer().start(FlxG.random.float(1.5, 4.5), function(_:FlxTimer) coverFlash());
 		}});
+	}
+
+	/// 超限大图先降采样到 maxSide 以内，防止 iOS 纹理/内存上限导致加载失败
+	function limitGraphic(g:FlxGraphic, maxSide:Int):FlxGraphic
+	{
+		if (g == null || g.bitmap == null) return g;
+		var bmd:BitmapData = g.bitmap;
+		if (bmd.width <= maxSide && bmd.height <= maxSide) return g;
+
+		var sc:Float = Math.min(maxSide / bmd.width, maxSide / bmd.height);
+		var w:Int = Math.max(1, Math.floor(bmd.width * sc));
+		var h:Int = Math.max(1, Math.floor(bmd.height * sc));
+		try
+		{
+			var small:BitmapData = new BitmapData(w, h, true, 0x00000000);
+			var m:Matrix = new Matrix();
+			m.scale(w / bmd.width, h / bmd.height);
+			small.draw(bmd, m);
+			var out:FlxGraphic = FlxGraphic.fromBitmapData(small, false, null, false);
+			trace('[AE-iOS] 大图降采样: ' + bmd.width + 'x' + bmd.height + ' -> ' + w + 'x' + h);
+			return out;
+		}
+		catch (e:Dynamic)
+		{
+			trace('[AE-iOS] 大图降采样失败: ' + e);
+			return g;
+		}
 	}
 
 	// ==================== [AE-iOS] AE 动态标题 ====================

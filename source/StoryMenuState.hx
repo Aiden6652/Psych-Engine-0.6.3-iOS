@@ -20,6 +20,7 @@ import flixel.graphics.FlxGraphic;
 import WeekData;
 #if MODS_ALLOWED
 import sys.FileSystem;
+import sys.io.File;
 #end
 
 using StringTools;
@@ -250,6 +251,7 @@ class StoryMenuState extends MusicBeatState
 		changeDifficulty();
 		showVictimTitle();
 		initClock();
+		writeStoryDiag();
 
         #if mobile
         addVirtualPad(FULL, A_B_X_Y);
@@ -624,6 +626,33 @@ class StoryMenuState extends MusicBeatState
 		trace('[AE-iOS] story 背景层数 = ' + bgInsertIndex);
 	}
 
+	/// [AE-iOS] 把 story 页的关键情况写进游戏目录，设备上直接看文件排障
+	function writeStoryDiag(extra:String = ''):Void
+	{
+		#if MODS_ALLOWED
+		var s:String = '';
+		s += 'time=' + Date.now().toString() + '\n';
+		s += 'view=' + FlxG.width + 'x' + FlxG.height + '\n';
+		s += 'bgInsertIndex=' + bgInsertIndex + '\n';
+		s += 'bgback=' + (Paths.image('bgback') != null) + '\n';
+		s += 'chains=' + (Paths.image('chains') != null) + '\n';
+		s += 'num0=' + (Paths.image('num0') != null) + '\n';
+		s += 'safeInfo=' + (Paths.image('safeInfo') != null) + '\n';
+		s += 'arrowLeft=' + (Paths.image('selectionArrowLEFT') != null) + '\n';
+		s += 'victim=' + (Paths.image('selectyourvictim') != null) + '\n';
+		s += 'weekCount=' + loadedWeeks.length + ' curWeek=' + curWeek + '\n';
+		s += 'weekItemGfx=' + (grpWeekText != null && grpWeekText.members.length > 0 && grpWeekText.members[0].graphic != null) + '\n';
+		#if VIDEOS_ALLOWED
+		var p:String = weekVideoPath(curWeek < 0 ? 0 : curWeek);
+		s += 'videoPath=' + p + '\n';
+		s += 'videoExists=' + FileSystem.exists(p) + '\n';
+		s += 'videoLoaded=' + (weekVideo != null) + ' idx=' + weekVideoIndex + '\n';
+		#end
+		if (extra.length > 0) s += extra + '\n';
+		try { File.saveContent(SUtil.getPath() + 'pe_ios_story.txt', s); } catch (e:Dynamic) {}
+		#end
+	}
+
 	/// 等比铺满屏幕（cover）并居中
 	function coverSprite(key:String):FlxSprite
 	{
@@ -684,10 +713,12 @@ class StoryMenuState extends MusicBeatState
 		{
 			trace('[AE-iOS] story 背景视频加载失败: ' + path);
 			weekVideoIndex = -1;
+			writeStoryDiag('videoLoad=FAILED path=' + path);
 			return;
 		}
 
 		weekVideoIndex = idx;
+		writeStoryDiag('videoLoad=OK path=' + path);
 		// load() 之后解码器还没就绪，延后一拍再 play()（与 VideoHandler 同样的做法）
 		new FlxTimer().start(0.001, function(_:FlxTimer)
 		{
