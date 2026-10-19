@@ -536,8 +536,8 @@ class TitleState extends MusicBeatState
 		if (bmd.width <= maxSide && bmd.height <= maxSide) return g;
 
 		var sc:Float = Math.min(maxSide / bmd.width, maxSide / bmd.height);
-		var w:Int = Math.max(1, Math.floor(bmd.width * sc));
-		var h:Int = Math.max(1, Math.floor(bmd.height * sc));
+		var w:Int = Std.int(Math.max(1, Math.floor(bmd.width * sc)));
+		var h:Int = Std.int(Math.max(1, Math.floor(bmd.height * sc)));
 		try
 		{
 			var small:BitmapData = new BitmapData(w, h, true, 0x00000000);
