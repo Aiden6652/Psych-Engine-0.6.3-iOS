@@ -11,7 +11,7 @@ package;
  */
 import flixel.FlxSprite;
 import flixel.FlxG;
-import flixel.FlxGroup;
+import flixel.group.FlxGroup;
 import MainMenuState;
 
 private typedef LayerDef = { name:String, l:Float, t:Float, r:Float, b:Float };
