@@ -14,10 +14,10 @@ import flixel.FlxG;
 import flixel.FlxGroup;
 import MainMenuState;
 
+private typedef LayerDef = { name:String, l:Float, t:Float, r:Float, b:Float };
+
 class AECover
 {
-	private typedef LayerDef = { name:String, l:Float, t:Float, r:Float, b:Float };
-
 	// bbox 由离线 PIL 对 alpha 通道 getbbox() 得到
 	static var DAY1_LAYERS:Array<LayerDef> = [
 		{ name: 'menus/mainmenu/layer1', l: 14, t: 79, r: 2438, b: 1748 },
