@@ -424,69 +424,69 @@ class TitleState extends MusicBeatState
 	// 隐藏 PE 原版 logoBumpin / gfDanceTitle，避免叠加打架。素材缺失时完全跳过，保留原版。
 	function addAETitle(bg:FlxSprite):Void
 	{
-		var frames:Array<String> = [];
-		for (i in 0...7)
+		// AE 封面是 7 张同尺寸(1280x1021)的【分层立绘】，必须叠加而非轮播：
+		//   title1=底部蓝烟, title6=红色星爆, title0/4/3/5/2=各角色/首领立绘。
+		// 顺序即绘制顺序（先画在底、后画在上）。
+		var order:Array<String> = [
+			'menus/title/title1',
+			'menus/title/title6',
+			'menus/title/title0',
+			'menus/title/title4',
+			'menus/title/title3',
+			'menus/title/title5',
+			'menus/title/title2'
+		];
+
+		var sc:Float = FlxG.width / 1280.0;           // 标题画布 1280x1021，等比铺满宽度
+		var oy:Float = (FlxG.height - 1021.0 * sc) * 0.5;
+		var any:Bool = false;
+
+		for (nm in order)
 		{
-			var nm:String = 'menus/title/title' + i;
 			try
 			{
-				if (Paths.image(nm) != null)
-					frames.push(nm);
+				var g:FlxGraphic = Paths.image(nm);
+				if (g == null) continue;
+				var s:FlxSprite = new FlxSprite(0, 0).loadGraphic(g);
+				s.setGraphicSize(Std.int(1280 * sc));
+				s.updateHitbox();
+				s.setPosition(0, oy);
+				s.scrollFactor.set();
+				s.antialiasing = ClientPrefs.globalAntialiasing;
+				add(s);
+				any = true;
 			}
 			catch (e:Dynamic) {}
 		}
-		if (frames.length == 0)
-			return; // 没侧载 AE 标题素材 -> 保留原版
+		if (!any) return; // 没侧载 AE 标题素材 -> 保留原版
 
+		if (bg != null) bg.visible = false; // 黑底让位给立绘
+
+		// titleLogo：放在左侧星爆上（对应 PC 封面 logo 居左）
 		try
 		{
-			bg.loadGraphic(Paths.image(frames[0]));
-			aeCoverFull(bg);
-			bg.scrollFactor.set();
+			var lg:FlxGraphic = Paths.image('menus/title/titleLogo');
+			if (lg != null)
+			{
+				var logoAe:FlxSprite = new FlxSprite().loadGraphic(lg);
+				logoAe.setGraphicSize(Std.int(FlxG.width * 0.42));
+				logoAe.updateHitbox();
+				logoAe.setPosition(FlxG.width * 0.04, FlxG.height * 0.16);
+				logoAe.scrollFactor.set();
+				logoAe.antialiasing = ClientPrefs.globalAntialiasing;
+				add(logoAe);
+			}
 		}
 		catch (e:Dynamic) {}
 
-		// titleLogo（大 logo）居中偏上
-		var logoAe:FlxSprite = null;
-		try
-		{
-			logoAe = new FlxSprite().loadGraphic(Paths.image('menus/title/titleLogo'));
-		}
-		catch (e:Dynamic)
-		{
-			logoAe = null;
-		}
-		if (logoAe != null && logoAe.graphic != null)
-		{
-			logoAe.setGraphicSize(Std.int(FlxG.width * 0.72));
-			logoAe.updateHitbox();
-			logoAe.setPosition((FlxG.width - logoAe.width) / 2, FlxG.height * 0.28);
-			logoAe.scrollFactor.set();
-			logoAe.antialiasing = ClientPrefs.globalAntialiasing;
-			add(logoAe);
-		}
-
+		// 隐藏 PE 原版标题素材
 		if (logoBl != null) logoBl.visible = false;
 		if (gfDance != null) gfDance.visible = false;
-
-		// 轮播 title0~6（每 1.1s 一张）
-		if (frames.length > 1)
+		// "Press Enter to Begin" 提到最上层，避免被立绘盖住
+		if (titleText != null)
 		{
-			var idx:Int = 0;
-			new FlxTimer().start(1.1, function(t:FlxTimer)
-			{
-				idx = (idx + 1) % frames.length;
-				try
-				{
-					var g:FlxGraphic = Paths.image(frames[idx]);
-					if (g != null && bg != null)
-					{
-						bg.loadGraphic(g);
-						aeCoverFull(bg);
-					}
-				}
-				catch (e:Dynamic) {}
-			}, 0);
+			remove(titleText);
+			add(titleText);
 		}
 	}
 

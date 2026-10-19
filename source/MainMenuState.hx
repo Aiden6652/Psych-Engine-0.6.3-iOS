@@ -20,6 +20,10 @@ import lime.app.Application;
 import Achievements;
 import editors.MasterEditorMenu;
 import flixel.input.keyboard.FlxKey;
+import flixel.graphics.FlxGraphic;
+import openfl.display.BitmapData;
+import openfl.geom.Rectangle;
+import openfl.geom.Point;
 
 using StringTools;
 
@@ -44,6 +48,9 @@ class MainMenuState extends MusicBeatState
 	public var magenta:FlxSprite;
 	// [AE-iOS] 暴露默认底给 AECover，便于第一天套把它隐藏掉
 	public var menuBG:FlxSprite;
+	// [AE-iOS] AE 按钮已切成"白色版/紫色版"两张图，选中时切换
+	var btnIdle:Array<FlxGraphic> = [];
+	var btnSel:Array<FlxGraphic> = [];
 	var camFollow:FlxObject;
 	var camFollowPos:FlxObject;
 	var debugKeys:Array<FlxKey>;
@@ -117,12 +124,12 @@ class MainMenuState extends MusicBeatState
 
 		for (i in 0...optionShit.length)
 		{
+			var nm:String = 'mainmenu/menu_' + optionShit[i];
+			btnIdle[i] = splitBtn(nm, false);
+			btnSel[i] = splitBtn(nm, true);
+
 			var menuItem:FlxSprite = new FlxSprite(0, topY + i * btnGap);
-			menuItem.frames = Paths.getSparrowAtlas('mainmenu/menu_' + optionShit[i]);
-			for (f in menuItem.frames.frames) f.offset.set(0, 0);
-			menuItem.animation.addByPrefix('idle', optionShit[i] + " basic", 24);
-			menuItem.animation.addByPrefix('selected', optionShit[i] + " white", 24);
-			menuItem.animation.play('idle');
+			if (btnIdle[i] != null) menuItem.loadGraphic(btnIdle[i]);
 			menuItem.ID = i;
 			menuItem.scale.set(btnScale, btnScale);
 			menuItem.updateHitbox();
@@ -283,6 +290,30 @@ class MainMenuState extends MusicBeatState
 		});
 	}
 
+	// [AE-iOS] AE 按钮图是「左半=白色版 / 右半=紫色选中版」并排的一张 1288x124。
+	// 直接按 x 切两半，彻底绕开图集里错误的 frameX/frameY
+	// （之前正是它把按钮推出屏幕、让左半被裁只剩 "LAY/FR/ARDS"、并露出右半紫条）。
+	static function splitBtn(name:String, sel:Bool):FlxGraphic
+	{
+		try
+		{
+			var full:FlxGraphic = Paths.image(name);
+			if (full == null || full.bitmap == null) return null;
+			var bmd = full.bitmap;
+			var w:Int = Std.int(bmd.width / 2);
+			var h:Int = bmd.height;
+			if (w <= 0 || h <= 0) return null;
+			var out = new BitmapData(w, h, true, 0x00000000);
+			out.copyPixels(bmd, new Rectangle(sel ? w : 0, 0, w, h), new Point(0, 0));
+			return FlxGraphic.fromBitmapData(out);
+		}
+		catch (e:Dynamic)
+		{
+			trace('[AE-iOS] splitBtn failed: ' + e);
+			return null;
+		}
+	}
+
 	function changeItem(huh:Int = 0)
 	{
 		curSelected += huh;
@@ -295,7 +326,8 @@ class MainMenuState extends MusicBeatState
 		menuItems.forEach(function(spr:FlxSprite)
 		{
 			var sel:Bool = (spr.ID == curSelected);
-			spr.animation.play(sel ? 'selected' : 'idle');
+			var g:FlxGraphic = sel ? btnSel[spr.ID] : btnIdle[spr.ID];
+			if (g != null) spr.loadGraphic(g);
 			var sc:Float = sel ? 0.58 : 0.48; // [AE-iOS] 选中项放大
 			spr.scale.set(sc, sc);
 			spr.updateHitbox();
