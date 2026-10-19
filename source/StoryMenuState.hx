@@ -18,6 +18,9 @@ import flixel.util.FlxTimer;
 import lime.net.curl.CURLCode;
 import flixel.graphics.FlxGraphic;
 import WeekData;
+#if MODS_ALLOWED
+import sys.FileSystem;
+#end
 
 using StringTools;
 
@@ -84,6 +87,16 @@ class StoryMenuState extends MusicBeatState
 	var rightArrow:FlxSprite;
 
 	var loadedWeeks:Array<WeekData> = [];
+
+	// [AE-iOS] story 页动态背景：videos/story/MenuVideo<周>.mp4（1280x720、约 11 秒循环）
+	#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+	var weekVideo:hxvlc.flixel.FlxVideoSprite = null;
+	var weekVideoIndex:Int = -1;
+	#end
+	/// 视频插入位置：AECover 城市分层背景之上、周名列表之下
+	var bgInsertIndex:Int = 0;
+	/// SELECT YOUR VICTIM 入场动画
+	var victimSpr:FlxSprite = null;
 
 	override function create()
 	{
@@ -229,11 +242,12 @@ class StoryMenuState extends MusicBeatState
 		add(txtWeekTitle);
 		txtWeekTitle.visible = false;
 
-		// [AE-iOS] 铺第一天城市背景（与主菜单同一套分层素材）
-		AECover.insertBgInto(this);
+		// [AE-iOS] 铺第一天城市背景（与主菜单同一套分层素材），作为视频缺失时的兜底
+		bgInsertIndex = AECover.insertBgInto(this);
 
 		changeWeek();
 		changeDifficulty();
+		showVictimTitle();
 
         #if mobile
         addVirtualPad(FULL, A_B_X_Y);
@@ -461,14 +475,15 @@ class StoryMenuState extends MusicBeatState
 			bullShit++;
 		}
 
-		bgSprite.visible = true;
 		var assetName:String = leWeek.weekBackground;
 		// [AE-iOS] 周数据 weekBackground 留空时，stock 逻辑会隐藏背景露出原生黄块 -> 兜底取 AE 自带背景图
 		if(assetName == null || assetName.length < 1) {
 			assetName = aeBgFallback(curWeek);
 		}
-		bgSprite.visible = true;
 		bgSprite.loadGraphic(Paths.image('menubackgrounds/menu_' + assetName));
+		// [AE-iOS] story 页背景由 MenuVideo<周>.mp4 / AECover 城市分层负责，
+		// stock 周背景不透明，留着会把动态背景整块盖住，这里保持隐藏。
+		bgSprite.visible = false;
 		PlayState.storyWeek = curWeek;
 
 		CoolUtil.difficulties = CoolUtil.defaultDifficulties.copy();
@@ -512,6 +527,7 @@ class StoryMenuState extends MusicBeatState
 			curDifficulty = newPos;
 		}
 		updateText();
+		syncWeekVideo();
 	}
 
 	function weekIsLocked(name:String):Bool {
@@ -548,5 +564,194 @@ class StoryMenuState extends MusicBeatState
 		#if !switch
 		intendedScore = Highscore.getWeekScore(loadedWeeks[curWeek].fileName, curDifficulty);
 		#end
+	}
+
+	// ───────────────────────── [AE-iOS] story 页动态背景 ─────────────────────────
+
+	inline function weekVideoPath(idx:Int):String
+	{
+		return Paths.video('story/MenuVideo' + idx);
+	}
+
+	/**
+	 * 按当前周切换背景视频。
+	 *
+	 * 找不到视频（没装模组 / 周数超出视频数量）时直接返回，
+	 * 由 AECover 的城市分层背景兜底，不会黑屏。
+	 */
+	function syncWeekVideo():Void
+	{
+		#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+		var idx:Int = curWeek;
+		if (idx < 0) idx = 0;
+		var path:String = weekVideoPath(idx);
+
+		if (!FileSystem.exists(path))
+		{
+			// story9 / story9z 没有对应视频 → 退回最后一个可用视频
+			var last:Int = 8;
+			while (last > 0 && !FileSystem.exists(weekVideoPath(last))) last--;
+			if (!FileSystem.exists(weekVideoPath(last))) return;
+			idx = last;
+			path = weekVideoPath(idx);
+		}
+
+		if (weekVideo == null)
+		{
+			createWeekVideo();
+			if (weekVideo == null) return;
+		}
+		if (idx == weekVideoIndex) return; // 同一周切难度等操作不用重新载入
+
+		// 循环 + 静音：story 页不该盖住菜单音乐，也不播视频原声
+		var options:Array<String> = ['--input-repeat=999999', '--no-audio'];
+		var loaded:Bool = false;
+		try { loaded = weekVideo.load(path, options); } catch (e:Dynamic) { loaded = false; }
+
+		if (!loaded)
+		{
+			trace('[AE-iOS] story 背景视频加载失败: ' + path);
+			weekVideoIndex = -1;
+			return;
+		}
+
+		weekVideoIndex = idx;
+		// load() 之后解码器还没就绪，延后一拍再 play()（与 VideoHandler 同样的做法）
+		new FlxTimer().start(0.001, function(_:FlxTimer)
+		{
+			if (weekVideo == null || weekVideo.bitmap == null) return;
+			// --no-audio 之外再压一层：不跟随 Flixel 音量，直接静音
+			weekVideo.autoVolumeHandle = false;
+			try { weekVideo.bitmap.volume = 0; } catch (e:Dynamic) {}
+			try { weekVideo.play(); } catch (e:Dynamic) {}
+		});
+		#end
+	}
+
+	#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+	function createWeekVideo():Void
+	{
+		try
+		{
+			// 不要传 (0, 0)：hxvlc 2.x 是 new(?instance, ?x, ?y)，(0,0) 会被当成 instance
+			var vs:hxvlc.flixel.FlxVideoSprite = new hxvlc.flixel.FlxVideoSprite();
+			vs.antialiasing = false;
+			// 插在 AECover 分层背景之上、周名列表之下
+			insert(bgInsertIndex, vs);
+			if (vs.bitmap != null)
+			{
+				vs.bitmap.onFormatSetup.add(function():Void fitWeekVideo(vs));
+			}
+			weekVideo = vs;
+		}
+		catch (e:Dynamic)
+		{
+			trace('[AE-iOS] 创建 story 背景视频失败: ' + e);
+			weekVideo = null;
+		}
+	}
+
+	/// 等比铺满（cover）并居中，多余部分裁到屏幕外；基准用相机视口，不用 FlxG。
+	function fitWeekVideo(vs:hxvlc.flixel.FlxVideoSprite):Void
+	{
+		try
+		{
+			if (vs.bitmap == null) return;
+			var bmd = vs.bitmap.bitmapData;
+			if (bmd == null) return;
+
+			var viewW:Float = FlxG.width;
+			var viewH:Float = FlxG.height;
+			try
+			{
+				if (vs.cameras != null && vs.cameras.length > 0 && vs.cameras[0] != null)
+				{
+					viewW = vs.cameras[0].width;
+					viewH = vs.cameras[0].height;
+				}
+			}
+			catch (e:Dynamic) {}
+
+			if (viewW <= 0 || viewH <= 0)
+			{
+				viewW = FlxG.width;
+				viewH = FlxG.height;
+			}
+
+			// 不能用 setGraphicSize()：它除以当前 frameWidth，而我们和 hxvlc 的
+			// onFormatSetup 回调挂在同一个事件上，顺序不保证，会算出灾难性的放大倍数。
+			var sc:Float = Math.max(viewW / bmd.width, viewH / bmd.height);
+			if (!(sc > 0) || sc != sc) sc = 1;
+
+			vs.scale.set(sc, sc);
+			vs.updateHitbox();
+			vs.x = (viewW - vs.width) / 2;
+			vs.y = (viewH - vs.height) / 2;
+			vs.scrollFactor.set(0, 0);
+
+			// 只走 FlxSprite 这条路：内层原生 Bitmap 不受相机/scale 管辖，
+			// 会带着偏移叠在画面上，造成「偏右 / 右下被裁」。
+			vs.bitmap.visible = false;
+		}
+		catch (e:Dynamic) {}
+	}
+	#end
+
+	/**
+	 * story 页入场动画：SELECT YOUR VICTIM。
+	 *
+	 * 素材是 1920x1080 的全屏覆盖图（红字居中），这里等比铺满后淡入，
+	 * 停留 2 秒再淡出销毁 —— 对应录屏里进 story 页时一闪而过的标题动画。
+	 */
+	function showVictimTitle():Void
+	{
+		try
+		{
+			var spr:FlxSprite = new FlxSprite();
+			spr.loadGraphic(Paths.image('selectyourvictim'));
+			if (spr.graphic == null) return;
+
+			var sc:Float = FlxG.width / spr.width;
+			if (!(sc > 0) || sc != sc) sc = 1;
+			spr.scale.set(sc, sc);
+			spr.updateHitbox();
+			spr.screenCenter();
+			spr.scrollFactor.set();
+			spr.antialiasing = ClientPrefs.globalAntialiasing;
+			spr.alpha = 0;
+			add(spr);
+			victimSpr = spr;
+
+			FlxTween.tween(spr, {alpha: 1}, 0.35);
+			new FlxTimer().start(2.2, function(_:FlxTimer)
+			{
+				if (victimSpr == null) return;
+				FlxTween.tween(victimSpr, {alpha: 0}, 0.5, {onComplete: function(_:FlxTween)
+				{
+					if (victimSpr != null)
+					{
+						remove(victimSpr, true);
+						victimSpr = null;
+					}
+				}});
+			});
+			trace('[AE-iOS] SELECT YOUR VICTIM 入场动画已播放');
+		}
+		catch (e:Dynamic)
+		{
+			victimSpr = null;
+		}
+	}
+
+	override function destroy():Void
+	{
+		#if (MODS_ALLOWED && VIDEOS_ALLOWED)
+		if (weekVideo != null)
+		{
+			try { weekVideo.destroy(); } catch (e:Dynamic) {}
+			weekVideo = null;
+		}
+		#end
+		super.destroy();
 	}
 }
