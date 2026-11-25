@@ -3282,7 +3282,7 @@ class PlayState extends MusicBeatState
 					+ '\n-- size --'
 					+ '\nFlxG.width/height=' + FlxG.width + 'x' + FlxG.height
 					+ '\ninitialWidth/Height=' + FlxG.initialWidth + 'x' + FlxG.initialHeight
-					+ '\ninitialZoom=' + FlxG.initialZoom
+					+ '\ninitialZoom=1 (flixel5)'
 					+ '\ncamGame ' + camGame.width + 'x' + camGame.height
 					+ '\ncamHUD ' + camHUD.width + 'x' + camHUD.height
 					+ '\nscale=' + scX + 'x' + scY
