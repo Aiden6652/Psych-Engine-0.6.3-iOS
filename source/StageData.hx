@@ -70,14 +70,14 @@ class StageData {
 
 	public static function getStageFile(stage:String):StageFile {
 		var rawJson:String = null;
-		var path:String = SUtil.getPath() + Paths.getPreloadPath('stages/' + stage + '.json');
+		var path:String = SUtil.resolveCI(SUtil.getPath() + Paths.getPreloadPath('stages/' + stage + '.json'));
 
 		#if MODS_ALLOWED
 		var modPath:String = Paths.modFolders('stages/' + stage + '.json');
 		if(FileSystem.exists(modPath)) {
 			rawJson = File.getContent(modPath);
 		} else if(FileSystem.exists(path)) {
-			rawJson = File.getContent(path);
+			rawJson = File.getContent(SUtil.resolveCI(path));
 		}
 		#else
 		if(Assets.exists(path)) {

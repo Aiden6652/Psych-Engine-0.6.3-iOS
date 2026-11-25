@@ -102,7 +102,7 @@ class Character extends FlxSprite
 				#if MODS_ALLOWED
 				var path:String = Paths.modFolders(characterPath);
 				if (!FileSystem.exists(path)) {
-					path = SUtil.getPath() + Paths.getPreloadPath(characterPath);
+					path = SUtil.resolveCI(SUtil.getPath() + Paths.getPreloadPath(characterPath));
 				}
 
 				if (!FileSystem.exists(path))
@@ -115,7 +115,7 @@ class Character extends FlxSprite
 				}
 
 				#if MODS_ALLOWED
-				var rawJson = File.getContent(path);
+				var rawJson = File.getContent(SUtil.resolveCI(path));
 				#else
 				var rawJson = Assets.getText(path);
 				#end
