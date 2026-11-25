@@ -132,7 +132,7 @@ class Character extends FlxSprite
 				//var modTextureToFind:String = Paths.modFolders("images/"+json.image);
 				//var textureToFind:String = Paths.getPath('images/' + json.image, new AssetType();
 				
-				if (FileSystem.exists(modTxtToFind) || FileSystem.exists(SUtil.getPath() + txtToFind) || Assets.exists(txtToFind))
+				if (FileSystem.exists(modTxtToFind) || FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + txtToFind)) || Assets.exists(txtToFind))
 				#else
 				if (Assets.exists(Paths.getPath('images/' + json.image + '.txt', TEXT)))
 				#end

@@ -1469,7 +1469,7 @@ class PlayState extends MusicBeatState
 		
 		for (folder in foldersToCheck)
 		{
-			if(FileSystem.exists(SUtil.getPath() + folder))
+			if(FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + folder)))
 			{
 				var frag:String = folder + name + '.frag';
 				var vert:String = folder + name + '.vert';
@@ -1595,7 +1595,7 @@ class PlayState extends MusicBeatState
 		var rel:String = 'characters/' + name + '.json';
 		#if sys
 		if(FileSystem.exists(Paths.modFolders(rel))) return true;
-		if(FileSystem.exists(SUtil.getPath() + Paths.getPreloadPath(rel))) return true;
+		if(FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + Paths.getPreloadPath(rel)))) return true;
 		#end
 		try
 		{
@@ -2534,7 +2534,7 @@ class PlayState extends MusicBeatState
 		var songName:String = Paths.formatToSongPath(SONG.song);
 		var file:String = Paths.json(songName + '/events');
 		#if MODS_ALLOWED
-		if (FileSystem.exists(Paths.modsJson(songName + '/events')) || FileSystem.exists(SUtil.getPath() + file)) {
+		if (FileSystem.exists(Paths.modsJson(songName + '/events')) || FileSystem.exists(SUtil.resolveCI(SUtil.getPath() + file))) {
 		#else
 		if (OpenFlAssets.exists(file)) {
 		#end
