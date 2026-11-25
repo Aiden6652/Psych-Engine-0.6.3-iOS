@@ -92,6 +92,21 @@ jobs:
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
           haxelib list
 
+      - name: 修补 hxcpp zlib（iOS 18.5 SDK 的 fdopen 宏冲突）
+        run: |
+          set -Eeuo pipefail
+          ZUTIL="$HAXELIB_ROOT/hxcpp/git/project/thirdparty/zlib-1.2.13/zutil.h"
+          ZGUTS="$HAXELIB_ROOT/hxcpp/git/project/thirdparty/zlib-1.2.13/gzguts.h"
+          for F in "$ZUTIL" "$ZGUTS"; do
+            if [ -f "$F" ]; then
+              # zlib 1.2.13 在 Apple 平台 define fdopen(fd,mode) NULL，与 iOS 18.5 SDK
+              # 的 _stdio.h 中真实 fdopen() 声明冲突 -> expected identifier。注释掉该宏。
+              sed -i '' '/define fdopen(fd,mode)/s/^[[:space:]]*#/\/\/#/' "$F" || true
+              echo "patched: $F"
+              grep -n 'fdopen' "$F" | head -3 || true
+            fi
+          done
+
       - name: 自检 hxvlc
         run: |
           set +e
